@@ -6,7 +6,10 @@
 
 ### How songs get in
 
-Drag audio files (MP3, WAV, M4A, FLAC, OGG) onto the **Add songs** box, or click it to choose files. Files are read directly by your browser and are **never uploaded**. Streaming services such as Spotify don't give apps access to the raw audio, so songs have to come from files.
+- **Your own files.** Drag audio files (MP3, WAV, M4A, FLAC, OGG) onto the **Add songs** box, or click it to choose files. Files are read directly by your browser and are **never uploaded**.
+- **iTunes.** Type a song or artist into the search box and press **Search iTunes**, then **+ Add** on a result. Apple only makes **30-second preview clips** available, so that's what gets added; for the full track, use a file you own. Searches go to Apple's public iTunes Search API, and the store region follows your browser's language setting. Previews are AAC audio, which Chrome, Edge and Safari can decode.
+
+Streaming services such as Spotify don't give apps access to the raw audio, so they can't be used as a source.
 
 ### Making a mashup
 

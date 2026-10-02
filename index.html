@@ -53,6 +53,17 @@
   .drop-all:hover, .drop-all.over { border-color: var(--accent); background: var(--panel-2); }
   .drop-all input { display: none; }
   .drop-all strong { color: var(--text); }
+  .it-search { display: flex; gap: 8px; margin-top: 10px; }
+  .it-search input { flex: 1; min-width: 0; background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 10px; font: inherit; }
+  .it-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px;
+    max-height: 320px; overflow-y: auto; }
+  .it-results:empty { display: none; }
+  .it-row { display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
+  .it-row img { width: 40px; height: 40px; border-radius: 4px; flex: none; background: var(--panel-2); }
+  .it-text { flex: 1; min-width: 0; }
+  .it-text > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 420px) { .it-results { grid-template-columns: 1fr; } }
   .songs { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; margin-top: 12px; }
   @media (max-width: 420px) { .songs { grid-template-columns: 1fr; } }
   .song-head { display: flex; align-items: center; gap: 8px; }
@@ -110,18 +121,24 @@
   <header>
     <h1>Mashup Studio</h1>
     <p>Put the vocals from one song over the beat from another, or mix sections from several songs together.
-      Your songs stay on your device: nothing is uploaded.</p>
+      Your song files stay on your device: nothing is uploaded. iTunes searches go to Apple.</p>
   </header>
 
   <div class="section-head">
     <h2>1. Songs</h2>
-    <p class="hint">Add audio files (MP3, WAV, M4A, FLAC, OGG). Each song's tempo and key are detected automatically.
+    <p class="hint">Add audio files (MP3, WAV, M4A, FLAC, OGG), or search iTunes for 30-second previews. Each song's tempo and key are detected automatically.
       Use <b>Split vocals &amp; music</b> to separate the singing from the instruments.</p>
   </div>
   <label class="drop-all" id="dropAll">
     <input type="file" id="fileInput" accept="audio/*" multiple>
     <strong>Add songs</strong>: drop audio files here, or click to choose them
   </label>
+  <form class="it-search" id="itForm">
+    <input type="search" id="itQuery" placeholder="Search iTunes for a song or artist" aria-label="Search iTunes">
+    <button class="primary">Search iTunes</button>
+  </form>
+  <div class="status" id="itStatus"></div>
+  <div class="it-results" id="itResults"></div>
   <div class="songs" id="songs"></div>
 
   <div class="section-head">
@@ -486,32 +503,96 @@
   }
 
   async function addFiles(files) {
-    ensureCtx();
     for (const file of files) {
       if (!file.type.startsWith('audio') && !/\.(mp3|wav|m4a|aac|flac|ogg|oga|opus|webm|aif|aiff)$/i.test(file.name)) continue;
-      const song = {
-        id: nextSongId++, name: file.name.replace(/\.[^.]+$/, ''), color: COLORS[(nextSongId - 2) % COLORS.length],
-        buffer: null, bpm: 120, firstBeat: 0, key: null, ver: 1,
-        stems: { vocals: null, inst: null }, peaks: {}, tab: 'full', sel: null, splitting: false
-      };
-      songs.push(song);
-      buildSongCard(song);
-      try {
-        const buf = await ctx.decodeAudioData(await file.arrayBuffer());
-        song.buffer = toStereo(buf);
-        song.peaks.full = peaksOf(song.buffer, 0, song.buffer.duration, 1000);
-        drawSong(song);
-        await yieldUI();
-        const mono = monoOf(song.buffer);
-        const t = await analyzeTempo(song.buffer, mono);
-        song.bpm = t.bpm; song.firstBeat = t.firstBeat;
-        song.key = detectKey(mono, song.buffer.sampleRate);
-        updateSongCard(song);
-      } catch (err) {
-        console.error(err);
-        song.el.querySelector('.song-meta').textContent = 'This file could not be read. Try an MP3, WAV, M4A or FLAC file.';
-      }
+      await addSong(file.name.replace(/\.[^.]+$/, ''), () => file.arrayBuffer(),
+        'This file could not be read. Try an MP3, WAV, M4A or FLAC file.');
     }
+  }
+  // getData returns a Promise<ArrayBuffer> of encoded audio
+  async function addSong(name, getData, failMsg) {
+    ensureCtx();
+    const song = {
+      id: nextSongId++, name, color: COLORS[(nextSongId - 2) % COLORS.length],
+      buffer: null, bpm: 120, firstBeat: 0, key: null, ver: 1,
+      stems: { vocals: null, inst: null }, peaks: {}, tab: 'full', sel: null, splitting: false
+    };
+    songs.push(song);
+    buildSongCard(song);
+    try {
+      const buf = await ctx.decodeAudioData(await getData());
+      song.buffer = toStereo(buf);
+      song.peaks.full = peaksOf(song.buffer, 0, song.buffer.duration, 1000);
+      drawSong(song);
+      await yieldUI();
+      const mono = monoOf(song.buffer);
+      const t = await analyzeTempo(song.buffer, mono);
+      song.bpm = t.bpm; song.firstBeat = t.firstBeat;
+      song.key = detectKey(mono, song.buffer.sampleRate);
+      updateSongCard(song);
+    } catch (err) {
+      console.error(err);
+      song.el.querySelector('.song-meta').textContent = failMsg;
+    }
+    return song;
+  }
+
+  // ================= iTunes search =================
+  // Apple only offers 30-second previews. The clips send CORS headers for every origin,
+  // but the Search API drops them for file:// pages (origin "null"), so search uses JSONP.
+  let itunesSeq = 0;
+  function jsonp(url) {
+    return new Promise((resolve, reject) => {
+      const cb = '__itunes' + Date.now() + Math.floor(Math.random() * 1e6);
+      const script = document.createElement('script');
+      const done = () => { delete window[cb]; script.remove(); clearTimeout(timer); };
+      const timer = setTimeout(() => { done(); reject(new Error('timeout')); }, 15000);
+      window[cb] = data => { done(); resolve(data); };
+      script.onerror = () => { done(); reject(new Error('network')); };
+      script.src = url + '&callback=' + cb;
+      document.head.appendChild(script);
+    });
+  }
+  async function searchItunes(term) {
+    const box = $('#itResults'), st = $('#itStatus');
+    term = term.trim();
+    if (!term) return;
+    const seq = ++itunesSeq;
+    st.className = 'status'; st.textContent = 'Searching iTunes…';
+    try {
+      const region = (navigator.language.match(/-([A-Za-z]{2})\b/) || [])[1];
+      const url = 'https://itunes.apple.com/search?media=music&entity=song&limit=25' +
+        (region ? '&country=' + region.toUpperCase() : '') + '&term=' + encodeURIComponent(term);
+      const data = await jsonp(url);
+      if (seq !== itunesSeq) return;
+      const hits = data.results.filter(r => r.previewUrl);
+      box.replaceChildren(...hits.map(itunesRow));
+      st.textContent = hits.length ? `${hits.length} songs. Each one adds a 30-second preview clip.` : 'No songs found.';
+    } catch (err) {
+      console.error(err);
+      if (seq !== itunesSeq) return;
+      st.className = 'status err'; st.textContent = 'iTunes search failed. Check your internet connection and try again.';
+    }
+  }
+  function itunesRow(r) {
+    const row = document.createElement('div');
+    row.className = 'it-row';
+    row.innerHTML = '<img alt="" loading="lazy"><div class="it-text"><div class="it-title"></div><div class="hint"></div></div><button>+ Add</button>';
+    row.querySelector('img').src = r.artworkUrl60 || r.artworkUrl100 || '';
+    row.querySelector('.it-title').textContent = r.trackName;
+    row.querySelector('.hint').textContent = `${r.artistName} · ${r.collectionName || ''}`;
+    const btn = row.querySelector('button');
+    btn.addEventListener('click', async () => {
+      btn.disabled = true; btn.textContent = 'Adding…';
+      const song = await addSong(`${r.artistName} – ${r.trackName} (preview)`, async () => {
+        const res = await fetch(r.previewUrl);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.arrayBuffer();
+      }, 'The iTunes preview could not be downloaded or decoded.');
+      if (song.buffer) btn.textContent = 'Added';
+      else { btn.textContent = 'Retry'; btn.disabled = false; }
+    });
+    return row;
   }
   function toStereo(buf) {
     if (buf.numberOfChannels === 2 && buf.sampleRate === SR) return buf;
@@ -1194,6 +1275,7 @@
   function bind() {
     const input = $('#fileInput'), drop = $('#dropAll');
     input.addEventListener('change', () => { addFiles([...input.files]); input.value = ''; });
+    $('#itForm').addEventListener('submit', e => { e.preventDefault(); searchItunes($('#itQuery').value); });
     for (const t of [drop, document.body]) {
       t.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
       t.addEventListener('dragleave', e => { if (e.target === drop || e.target === document.body) drop.classList.remove('over'); });
@@ -1225,7 +1307,7 @@
   requestAnimationFrame(frame);
 
   // exposed for automated tests
-  window.__mashup = { songs, P, wsola, resample, detectKey, renderCache, renderKey, clipLen, projectEnd, splitSong, addFiles };
+  window.__mashup = { songs, P, wsola, resample, detectKey, renderCache, renderKey, clipLen, projectEnd, splitSong, addFiles, addSong, searchItunes };
 })();
 </script>
 </body>
