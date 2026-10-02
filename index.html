@@ -821,7 +821,8 @@
       const t0 = performance.now();
       const tick = () => report(`Starting the AI model ${label}… ${fmt((performance.now() - t0) / 1000)}`, null);
       tick(); const timer = setInterval(tick, 1000);
-      const worker = new Worker(URL.createObjectURL(new Blob([WORKER_SRC], { type: 'text/javascript' })), { type: 'module' });
+      // A classic worker: Chrome refuses module workers from blob URLs on pages opened from disk
+      const worker = new Worker(URL.createObjectURL(new Blob([WORKER_SRC], { type: 'text/javascript' })));
       try {
         const load = workerCall(worker, { type: 'load', ortUrl: ORT_URL, ortBase: ORT_BASE, demucsUrl: DEMUCS_URL, eps, model: buf }, [buf]);
         await (timeout ? Promise.race([load, new Promise((_, rej) => setTimeout(() => rej(new Error('timed out')), timeout))]) : load);
