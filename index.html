@@ -799,12 +799,14 @@
         } else if (m.type === 'separate') {
           proc.onProgress = p => postMessage({ type: 'progress', progress: p.progress });
           const r = await proc.separate(m.L, m.R);
-          const res = {}, bufs = new Set();
-          for (const k of ['vocals', 'drums', 'bass', 'other']) {
-            res[k] = { left: r[k].left, right: r[k].right };
-            bufs.add(r[k].left.buffer); bufs.add(r[k].right.buffer);
+          // Send back only the vocals and the instrumental (drums + bass + other)
+          const res = { vocals: [r.vocals.left, r.vocals.right], inst: [] };
+          for (const side of ['left', 'right']) {
+            const y = r.drums[side], b = r.bass[side], o = r.other[side];
+            for (let i = 0; i < y.length; i++) y[i] += b[i] + o[i];
+            res.inst.push(y);
           }
-          postMessage({ type: 'done', res }, [...bufs]);
+          postMessage({ type: 'done', res }, [...new Set([...res.vocals, ...res.inst].map(a => a.buffer))]);
         }
       } catch (err) { postMessage({ type: 'error', message: String((err && err.message) || err) }); }
     };`;
@@ -820,7 +822,18 @@
       w.postMessage(msg, transfer);
     });
   }
+  // The model uses 2-3 GB while it runs and the worker never gives that memory back, so the
+  // worker is shut down when no split has been asked for in a while. Chrome reloads tabs
+  // that hold that much memory.
+  const IDLE_SHUTDOWN = 30000;
+  let idleTimer = 0, gpuFailed = false;
+  function scheduleShutdown() {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { if (separator) { separator.worker.terminate(); separator = null; } }, IDLE_SHUTDOWN);
+  }
   async function getSeparator(report, forceCpu = false) {
+    clearTimeout(idleTimer);
+    forceCpu = forceCpu || gpuFailed;
     if (separator && (!forceCpu || separator.cpu)) return separator;
     if (separator) { separator.worker.terminate(); separator = null; }
     const model = await fetchModel(report);
@@ -840,10 +853,12 @@
     };
     let proc = null;
     if (webgpu) {
-      try { proc = await start(['webgpu'], 'on your graphics card', model.slice(0), GPU_TIMEOUT); }
+      try { proc = await start(['webgpu'], 'on your graphics card', model, GPU_TIMEOUT); }
       catch (err) { console.warn('WebGPU failed, using the processor instead:', err); }
     }
-    if (!proc) proc = await start(['wasm'], webgpu ? 'on the processor (the graphics card did not work)' : 'on the processor', model, 0);
+    // The model buffer went to the failed worker, so read it again (from the browser cache)
+    if (!proc) proc = await start(['wasm'], webgpu ? 'on the processor (the graphics card did not work)' : 'on the processor',
+      webgpu ? await fetchModel(report) : model, 0);
     separator = proc;
     return proc;
   }
@@ -860,62 +875,77 @@
     if (!res.ok) throw new Error(`model download failed (HTTP ${res.status})`);
     const total = +res.headers.get('Content-Length') || 0;
     const reader = res.body.getReader();
-    const chunks = []; let got = 0;
+    // Write straight into one buffer when the size is known, so the 170 MB model is held once
+    let buf = new Uint8Array(total || 200 * 1048576), got = 0;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      chunks.push(value); got += value.length;
+      if (got + value.length > buf.length) { const bigger = new Uint8Array((got + value.length) * 1.25); bigger.set(buf.subarray(0, got)); buf = bigger; }
+      buf.set(value, got); got += value.length;
       report(`Downloading the AI model (one time only): ${(got / 1048576).toFixed(0)}${total ? ' of ' + (total / 1048576).toFixed(0) : ''} MB`, total ? got / total : null);
     }
-    const buf = new Uint8Array(got); let o = 0;
-    for (const c of chunks) { buf.set(c, o); o += c.length; }
-    if (cache) { try { await cache.put(MODEL_URL, new Response(buf.slice().buffer)); } catch (_) {} }
+    if (got !== buf.length) buf = buf.slice(0, got);
+    if (cache) { try { await cache.put(MODEL_URL, new Response(buf)); } catch (_) {} }
     return buf.buffer;
   }
 
   // Runs the AI model on samples i0..i1 of the song (on the graphics card, falling back to
-  // the processor) and returns { vocals: [L, R], inst: [L, R] }.
+  // the processor) and returns { vocals, inst } AudioBuffers. Long stretches are done in
+  // overlapping windows of about 47 s that are cross-faded together, so the separated
+  // audio of a whole song is never held in more than one copy.
+  const WIN = 8 * Math.floor(343980 * 0.75), XF = 2 * 44100;
   async function separateSamples(song, i0, i1, report, label) {
-    const t0 = performance.now();
-    const run = async proc => {
-      const onProgress = progress => {
-        const el = (performance.now() - t0) / 1000;
-        const eta = progress > 0.05 ? ` (about ${fmt(el / progress - el)} left)` : '';
-        report(`${label}${proc.cpu ? ' on the processor' : ''}: ${Math.round(progress * 100)}%${eta}`, progress);
-      };
-      report(`${label}: 0%`, 0);
-      const l = song.buffer.getChannelData(0).slice(i0, i1), r = song.buffer.getChannelData(1).slice(i0, i1);
-      const { res } = await workerCall(proc.worker, { type: 'separate', L: l, R: r }, [l.buffer, r.buffer], onProgress);
-      // Graphics cards sometimes return a few invalid samples (NaN): silence those. Only if
-      // there are many is the result unusable.
-      let bad = 0, total = 0;
-      for (const k of ['vocals', 'drums', 'bass', 'other']) for (const ch of [res[k].left, res[k].right]) {
-        total += ch.length;
-        for (let i = 0; i < ch.length; i++) if (!Number.isFinite(ch[i])) { ch[i] = 0; bad++; }
+    const n = i1 - i0, t0 = performance.now();
+    const vocals = ctx.createBuffer(2, n, SR), inst = ctx.createBuffer(2, n, SR);
+    const starts = [];
+    for (let a = 0; ; a += WIN - XF) { starts.push(a); if (a + WIN >= n) break; }
+    try {
+      for (let k = 0; k < starts.length; k++) {
+        const w0 = starts[k], w1 = Math.min(n, w0 + WIN);
+        const run = async proc => {
+          const onProgress = progress => {
+            const done = (k + progress) / starts.length, el = (performance.now() - t0) / 1000;
+            const eta = done > 0.05 ? ` (about ${fmt(el / done - el)} left)` : '';
+            report(`${label}${proc.cpu ? ' on the processor' : ''}: ${Math.round(done * 100)}%${eta}`, done);
+          };
+          onProgress(0);
+          const l = song.buffer.getChannelData(0).slice(i0 + w0, i0 + w1), r = song.buffer.getChannelData(1).slice(i0 + w0, i0 + w1);
+          const { res } = await workerCall(proc.worker, { type: 'separate', L: l, R: r }, [l.buffer, r.buffer], onProgress);
+          // Graphics cards sometimes return a few invalid samples (NaN): silence those. Only
+          // if there are many is the result unusable.
+          let bad = 0, total = 0;
+          for (const ch of [...res.vocals, ...res.inst]) {
+            total += ch.length;
+            for (let i = 0; i < ch.length; i++) if (!Number.isFinite(ch[i])) { ch[i] = 0; bad++; }
+          }
+          if (bad > total * 0.001) throw new Error(`the graphics card returned invalid audio (${(100 * bad / total).toFixed(1)}% of it)`);
+          if (bad) console.warn(`Silenced ${bad} invalid samples`);
+          return res;
+        };
+        let proc = await getSeparator(report), res;
+        try { res = await run(proc); } catch (err) {
+          if (proc.cpu) throw err;
+          console.warn('GPU separation failed, retrying on the processor:', err);
+          gpuFailed = true;
+          const why = String((err && err.message) || err);
+          report(`The graphics card failed (${why}${/worker stopped/.test(why) ? ', possibly out of memory' : ''}), so this is starting again on the processor.`, null);
+          await new Promise(r => setTimeout(r, 4000));
+          res = await run(await getSeparator(report, true));
+        }
+        // overlap-add with complementary linear fades across the XF-sample overlaps
+        for (const [buf, chs] of [[vocals, res.vocals], [inst, res.inst]]) for (let c = 0; c < 2; c++) {
+          const out = buf.getChannelData(c), y = chs[c];
+          for (let i = 0; i < y.length; i++) {
+            let g = 1;
+            if (k > 0 && i < XF) g = i / XF;
+            if (w1 < n && i >= y.length - XF) g = Math.min(g, (y.length - i) / XF);
+            out[w0 + i] += g * y[i];
+          }
+        }
       }
-      if (bad > total * 0.001) throw new Error(`the graphics card returned invalid audio (${(100 * bad / total).toFixed(1)}% of it)`);
-      if (bad) console.warn(`Silenced ${bad} invalid samples`);
-      return res;
-    };
-    let proc = await getSeparator(report), res;
-    try { res = await run(proc); } catch (err) {
-      if (proc.cpu) throw err;
-      console.warn('GPU separation failed, retrying on the processor:', err);
-      const why = String((err && err.message) || err);
-      const note = `The graphics card failed (${why}${/worker stopped/.test(why) ? ', possibly out of memory' : ''}), so this is starting again on the processor.`;
-      report(note, null);
-      await new Promise(r => setTimeout(r, 4000));
-      const cpu = await getSeparator(report, true);
-      res = await run(cpu);
-    }
-    const inst = ['left', 'right'].map(side => {
-      const d = res.drums[side], b = res.bass[side], o = res.other[side], y = new Float32Array(d.length);
-      for (let i = 0; i < y.length; i++) y[i] = d[i] + b[i] + o[i];
-      return y;
-    });
-    return { vocals: [res.vocals.left, res.vocals.right], inst };
+    } finally { scheduleShutdown(); }
+    return { vocals, inst };
   }
-  const toBuffer = chs => { const b = ctx.createBuffer(2, chs[0].length, SR); b.copyToChannel(chs[0], 0); b.copyToChannel(chs[1], 1); return b; };
   function songReporter(song) {
     const st = song.el.querySelector('.split-status'), bar = song.el.querySelector('.progress');
     return (msg, frac) => {
@@ -933,8 +963,7 @@
     splitQueue = splitQueue.then(async () => {
       try {
         const t0 = performance.now();
-        const r = await separateSamples(song, 0, song.buffer.length, report, 'Splitting vocals from the music');
-        const voc = toBuffer(r.vocals), inst = toBuffer(r.inst);
+        const { vocals: voc, inst } = await separateSamples(song, 0, song.buffer.length, report, 'Splitting vocals from the music');
         song.stems = { vocals: voc, inst };
         song.parts = [];
         song.peaks.vocals = peaksOf(voc, 0, voc.duration, 1000);
@@ -970,7 +999,7 @@
       const t0 = performance.now();
       try {
         const r = await separateSamples(song, Math.round(a * SR), Math.round(b * SR), report, `Splitting the vocals for ${fmt(s0)}–${fmt(s1)}`);
-        song.parts.push({ s0: a, s1: b, vocals: toBuffer(r.vocals), inst: toBuffer(r.inst) });
+        song.parts.push({ s0: a, s1: b, vocals: r.vocals, inst: r.inst });
         report(`Vocals for ${fmt(s0)}–${fmt(s1)} ready (took ${fmt((performance.now() - t0) / 1000)}).`, null);
         st.classList.add('ok');
       } catch (err) {
