@@ -1,18 +1,21 @@
 # 1-file
 
-## SongSync
+## Mashup Studio
 
-`index.html` is a self-contained browser app that syncs two songs together. It needs no build and no install: open the file in a browser.
+`index.html` is a self-contained browser app for making mashups. You can put the vocals from one song over the beat from another, or combine sections from several songs. It needs no build and no install: open the file in Chrome or Edge.
 
-1. Load a song into deck **A** and another into deck **B** (drag and drop, or click).
-2. Each song's tempo (BPM) and beat grid are detected automatically. Both songs then play at a shared **Mix BPM** with their beats aligned.
-3. Fine-tune the result:
-   - **BPM** per deck: type a value, use ÷2 / ×2, or tap along.
-   - **B enters**: choose which beat of song A song B starts on. You can move it by a beat or a bar (4 beats).
-   - **Nudge B**: shift song B by milliseconds. The ← / → keys move it by 5 ms.
-   - **Mark beat**: during playback, press exactly on a beat to correct that song's beat grid.
-4. Use the crossfader and volume sliders to balance the two songs, then **Export mix** to download a WAV.
+### How songs get in
 
-The beat alignment view shows the drum hits of both songs around the playhead. When the songs are in sync, the peaks line up.
+Drag audio files (MP3, WAV, M4A, FLAC, OGG) onto the **Add songs** box, or click it to choose files. Files are read directly by your browser and are **never uploaded**. Streaming services such as Spotify don't give apps access to the raw audio, so songs have to come from files.
 
-Note: tempo matching changes playback speed, so pitch shifts along with it, as on a turntable.
+### Making a mashup
+
+1. **Add songs.** Each song's tempo (BPM), beat grid and key are detected automatically.
+2. **Split vocals & music** (optional). An AI model (Meta's Demucs, via [`demucs-web`](https://github.com/timcsy/demucs-web)) runs in your browser and separates the singing from the instruments. The model downloads once, about 170 MB, and is then kept in the browser's cache. It uses your graphics card through WebGPU when available.
+3. **Pick a section.** Choose the Full song, Vocals or Instrumental tab, then drag across the waveform. Selections snap to bars.
+4. **+ Beat** puts the section on the Beat lane. **+ Vocals** puts it on a Vocals lane at the playhead.
+5. **Arrange.** Drag sections to move them, drag their edges to trim them, and use Duplicate or Delete. Each lane has mute, solo and volume controls.
+6. **Tempo and key.** Every section is time-stretched to the mashup tempo without changing its pitch. Vocal sections are shifted to the beat's key automatically, and **Key shift** / **Match key** let you adjust that.
+7. **Export WAV** downloads the finished mashup.
+
+Keyboard: `Space` plays or pauses, `Delete` removes the selected section, and `Ctrl/⌘+D` duplicates it.
