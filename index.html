@@ -64,6 +64,17 @@
   .it-text { flex: 1; min-width: 0; }
   .it-text > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   @media (max-width: 420px) { .it-results { grid-template-columns: 1fr; } }
+  .lyrics { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+  .lyr-search { display: flex; gap: 6px; }
+  .lyr-search input { flex: 1; min-width: 0; background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 5px 8px; font: inherit; }
+  .lyr-list { max-height: 210px; overflow-y: auto; margin-top: 4px; }
+  .lyr-line { display: flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: 6px; }
+  .lyr-line .t { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; width: 34px; flex: none; }
+  .lyr-line .txt { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 3px 0; white-space: normal; }
+  .lyr-line .add { padding: 2px 8px; }
+  .lyr-line.sel { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--c); }
+  .lyr-line.now .txt { color: var(--c); }
   .songs { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; margin-top: 12px; }
   @media (max-width: 420px) { .songs { grid-template-columns: 1fr; } }
   .song-head { display: flex; align-items: center; gap: 8px; }
@@ -121,7 +132,7 @@
   <header>
     <h1>Mashup Studio</h1>
     <p>Put the vocals from one song over the beat from another, or mix sections from several songs together.
-      Your song files stay on your device: nothing is uploaded. iTunes searches go to Apple.</p>
+      Your song files stay on your device: nothing is uploaded. iTunes searches go to Apple and lyrics lookups go to LRCLIB.</p>
   </header>
 
   <div class="section-head">
@@ -209,6 +220,20 @@
     </div>
     <div class="progress" hidden><div></div></div>
     <div class="status split-status"></div>
+    <div class="lyrics">
+      <form class="lyr-search">
+        <input type="search" class="lyr-q" placeholder="Artist and song title" aria-label="Lyrics search">
+        <button>Find lyrics</button>
+      </form>
+      <div class="status lyr-status"></div>
+      <div class="lyr-list"></div>
+      <div class="row lyr-sync" hidden>
+        <label>Lyrics timing</label>
+        <button class="lyrE" title="Lyrics appear 0.1 s earlier">◀</button>
+        <span class="readout lyr-off">0.0 s</span>
+        <button class="lyrL" title="Lyrics appear 0.1 s later">▶</button>
+      </div>
+    </div>
     <div class="row">
       <label>BPM</label>
       <input class="bpm" type="number" min="30" max="300" step="0.01" style="width:76px" disabled>
@@ -516,12 +541,13 @@
     }
   }
   // getData returns a Promise<ArrayBuffer> of encoded audio
-  async function addSong(name, getData, failMsg) {
+  async function addSong(name, getData, failMsg, meta = {}) {
     ensureCtx();
     const song = {
       id: nextSongId++, name, color: COLORS[(nextSongId - 2) % COLORS.length],
       buffer: null, bpm: 120, firstBeat: 0, key: null, ver: 1,
-      stems: { vocals: null, inst: null }, peaks: {}, tab: 'full', sel: null, splitting: false
+      stems: { vocals: null, inst: null }, peaks: {}, tab: 'full', sel: null, splitting: false,
+      meta, lyrics: null, lyrOffset: 0, lyrSel: -1
     };
     songs.push(song);
     buildSongCard(song);
@@ -536,6 +562,7 @@
       song.bpm = t.bpm; song.firstBeat = t.firstBeat;
       song.key = detectKey(mono, song.buffer.sampleRate);
       updateSongCard(song);
+      findLyrics(song);
     } catch (err) {
       console.error(err);
       song.el.querySelector('.song-meta').textContent = failMsg;
@@ -594,7 +621,7 @@
         const res = await fetch(r.previewUrl);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         return res.arrayBuffer();
-      }, 'The iTunes preview could not be downloaded or decoded.');
+      }, 'The iTunes preview could not be downloaded or decoded.', { artist: r.artistName, track: r.trackName, preview: true });
       if (song.buffer) btn.textContent = 'Added';
       else { btn.textContent = 'Retry'; btn.disabled = false; }
     });
@@ -630,6 +657,10 @@
     el.querySelector('.double').addEventListener('click', () => setSongBpm(song, song.bpm * 2));
     el.querySelector('.gridL').addEventListener('click', () => shiftGrid(song, -0.01));
     el.querySelector('.gridR').addEventListener('click', () => shiftGrid(song, 0.01));
+    el.querySelector('.lyr-q').value = lyricsQuery(song);
+    el.querySelector('.lyr-search').addEventListener('submit', e => { e.preventDefault(); findLyrics(song, el.querySelector('.lyr-q').value); });
+    el.querySelector('.lyrE').addEventListener('click', () => nudgeLyrics(song, -0.1));
+    el.querySelector('.lyrL').addEventListener('click', () => nudgeLyrics(song, 0.1));
 
     // selection by dragging on the waveform
     const cv = el.querySelector('.wave');
@@ -738,22 +769,48 @@
 
   // ================= Vocal separation =================
   let separator = null;
-  async function getSeparator(report) {
-    if (separator) return separator;
+  // Load the model on the graphics card (WebGPU) if there is one. If that fails, or takes
+  // longer than GPU_TIMEOUT (some GPUs hang while compiling the model), use the processor.
+  const GPU_TIMEOUT = 60000;
+  let ortMod = null, DemucsCls = null;
+  async function getSeparator(report, forceCpu = false) {
+    if (separator && (!forceCpu || separator.cpu)) return separator;
     report('Loading the AI engine…', null);
-    const ort = await import(ORT_URL);
-    ort.env.wasm.wasmPaths = ORT_BASE;
-    ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
-    let webgpu = false;
-    try { webgpu = !!(navigator.gpu && await navigator.gpu.requestAdapter()); } catch (_) {}
-    const { DemucsProcessor } = await import(DEMUCS_URL);
-    const proc = new DemucsProcessor({
-      ort,
-      sessionOptions: { executionProviders: webgpu ? ['webgpu', 'wasm'] : ['wasm'] }
-    });
+    if (!ortMod) {
+      ortMod = await import(ORT_URL);
+      ortMod.env.wasm.wasmPaths = ORT_BASE;
+      ortMod.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
+      DemucsCls = (await import(DEMUCS_URL)).DemucsProcessor;
+    }
     const model = await fetchModel(report);
-    report(`Starting the AI model${webgpu ? ' on your graphics card' : ''}…`, null);
-    await proc.loadModel(model);
+    let webgpu = false;
+    if (!forceCpu) try { webgpu = !!(navigator.gpu && await navigator.gpu.requestAdapter()); } catch (_) {}
+    const start = async (eps, label, buf) => {
+      const t0 = performance.now();
+      const tick = () => report(`Starting the AI model ${label}… ${fmt((performance.now() - t0) / 1000)}`, null);
+      tick(); const timer = setInterval(tick, 1000);
+      try {
+        const proc = new DemucsCls({ ort: ortMod, sessionOptions: { executionProviders: eps } });
+        await proc.loadModel(buf);
+        return proc;
+      } finally { clearInterval(timer); }
+    };
+    let proc = null;
+    if (webgpu) {
+      try {
+        // ONNX Runtime may take ownership of the buffer, so give the GPU attempt a copy
+        proc = await Promise.race([
+          start(['webgpu'], 'on your graphics card', model.slice(0)),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timed out')), GPU_TIMEOUT))
+        ]);
+      } catch (err) {
+        console.warn('WebGPU failed, using the processor instead:', err);
+      }
+    }
+    if (!proc) {
+      proc = await start(['wasm'], webgpu ? 'on the processor (the graphics card did not work)' : 'on the processor', model);
+      proc.cpu = true;
+    }
     separator = proc;
     return proc;
   }
@@ -795,17 +852,27 @@
     report('Waiting for the other song to finish splitting…', null);
     splitQueue = splitQueue.then(async () => {
       try {
-        const proc = await getSeparator(report);
-        const t0 = performance.now();
-        proc.onProgress = ({ progress }) => {
-          const el = (performance.now() - t0) / 1000;
-          const eta = progress > 0.05 ? ` (about ${fmt(el / progress - el)} left)` : '';
-          report(`Splitting vocals from the music: ${Math.round(progress * 100)}%${eta}`, progress);
-        };
-        report('Splitting vocals from the music: 0%', 0);
-        await yieldUI();
         const L = song.buffer.getChannelData(0), R = song.buffer.getChannelData(1);
-        const res = await proc.separate(L, R);
+        const t0 = performance.now();
+        const run = async proc => {
+          proc.onProgress = ({ progress }) => {
+            const el = (performance.now() - t0) / 1000;
+            const eta = progress > 0.05 ? ` (about ${fmt(el / progress - el)} left)` : '';
+            report(`Splitting vocals from the music${proc.cpu ? ' on the processor' : ''}: ${Math.round(progress * 100)}%${eta}`, progress);
+          };
+          report('Splitting vocals from the music: 0%', 0);
+          await yieldUI();
+          const res = await proc.separate(L, R);
+          // Some GPUs return NaNs instead of failing outright
+          if (!res.vocals.left.slice(0, 441000).every(Number.isFinite)) throw new Error('the graphics card returned invalid audio');
+          return res;
+        };
+        let proc = await getSeparator(report), res;
+        try { res = await run(proc); } catch (err) {
+          if (proc.cpu) throw err;
+          console.warn('GPU separation failed, retrying on the processor:', err);
+          res = await run(await getSeparator(report, true));
+        }
         const len = L.length;
         const voc = ctx.createBuffer(2, len, SR), inst = ctx.createBuffer(2, len, SR);
         voc.copyToChannel(res.vocals.left, 0); voc.copyToChannel(res.vocals.right, 1);
@@ -829,6 +896,102 @@
       updateSongCard(song);
       if (song.stems.vocals) arrangementChanged();
     });
+  }
+
+  // ================= Lyrics =================
+  // Time-stamped lyrics come from LRCLIB (lrclib.net), a free, open lyrics database.
+  function lyricsQuery(song) {
+    if (song.meta.artist) return `${song.meta.artist} ${song.meta.track}`;
+    return song.name.replace(/[_]+/g, ' ').replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+      .replace(/\b(official|music|video|audio|lyrics?|visuali[sz]er|hq|hd|\d+\s?kbps|\d+k|mp3|remaster(ed)?)\b/gi, ' ')
+      .replace(/\s*[-–|]\s*/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  function parseLrc(text) {
+    const out = [];
+    for (const raw of text.split(/\r?\n/)) {
+      const tags = [...raw.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
+      const words = raw.replace(/\[[^\]]*\]/g, '').trim();
+      for (const m of tags) out.push({ t: +m[1] * 60 + +m[2], text: words });
+    }
+    return out.sort((a, b) => a.t - b.t);
+  }
+  async function findLyrics(song, q) {
+    const st = song.el.querySelector('.lyr-status');
+    q = (q ?? lyricsQuery(song)).trim();
+    if (!q) return;
+    st.className = 'status lyr-status'; st.textContent = 'Looking up lyrics…';
+    try {
+      const url = 'https://lrclib.net/api/search?q=' + encodeURIComponent(q);
+      let res = await fetch(url);
+      if (res.status >= 500) { await new Promise(r => setTimeout(r, 1500)); res = await fetch(url); }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const hits = (await res.json()).filter(r => r.syncedLyrics);
+      if (!hits.length) {
+        song.lyrics = null; renderLyrics(song);
+        st.textContent = 'No time-stamped lyrics found. Edit the search above and try again, or drag across the waveform instead.';
+        return;
+      }
+      const dur = song.buffer.duration;
+      hits.sort((a, b) => Math.abs(a.duration - dur) - Math.abs(b.duration - dur));
+      const best = hits[0];
+      const lines = parseLrc(best.syncedLyrics);
+      song.lyrics = lines.map((l, i) => ({ t: l.t, end: i + 1 < lines.length ? lines[i + 1].t : Math.min(dur, l.t + 6), text: l.text }))
+        .filter(l => l.text);
+      song.lyrSel = -1;
+      renderLyrics(song);
+      const off = Math.abs(best.duration - dur);
+      st.textContent = `${best.artistName} – ${best.trackName}. ` + (off > 4
+        ? `Those lyrics are timed for a ${fmt(best.duration)} version and this file is ${fmt(dur)}, so lines may not line up: check with ▶ and use Lyrics timing below.`
+        : 'Click a line to hear it, + to add it to the mashup.');
+    } catch (err) {
+      console.error(err);
+      st.className = 'status lyr-status err'; st.textContent = 'The lyrics lookup failed. Check your internet connection and try again.';
+    }
+  }
+  function renderLyrics(song) {
+    const list = song.el.querySelector('.lyr-list');
+    song.el.querySelector('.lyr-sync').hidden = !song.lyrics;
+    song.el.querySelector('.lyr-off').textContent = (song.lyrOffset > 0 ? '+' : '') + song.lyrOffset.toFixed(1) + ' s';
+    if (!song.lyrics) { list.replaceChildren(); return; }
+    list.replaceChildren(...song.lyrics.map((l, i) => {
+      const row = document.createElement('div');
+      row.className = 'lyr-line' + (i === song.lyrSel ? ' sel' : '');
+      row.innerHTML = '<span class="t"></span><button class="txt" title="Hear this line"></button><button class="add" title="Add this line to the mashup">+</button>';
+      row.querySelector('.t').textContent = fmt(l.t + song.lyrOffset);
+      row.querySelector('.txt').textContent = l.text;
+      row.querySelector('.txt').addEventListener('click', () => {
+        const again = song.lyrSel === i && preview && preview.song === song;
+        selectLine(song, i);
+        if (!again) togglePreview(song); else stopPreview();
+      });
+      row.querySelector('.add').addEventListener('click', () => { selectLine(song, i); addClipFromSong(song, 1, true); });
+      return row;
+    }));
+  }
+  function nudgeLyrics(song, dt) {
+    song.lyrOffset = Math.round((song.lyrOffset + dt) * 10) / 10;
+    if (song.lyrSel >= 0) selectLine(song, song.lyrSel);
+    renderLyrics(song);
+  }
+  // Cut a lyric line on beat boundaries: start on the beat at or before the first word,
+  // end on the beat at or before the next line, so it keeps the song's rhythm.
+  function selectLine(song, i) {
+    const l = song.lyrics[i], per = 60 / song.bpm, fb = song.firstBeat, dur = song.buffer.duration;
+    const t0 = l.t + song.lyrOffset, t1 = l.end + song.lyrOffset;
+    let k0 = Math.floor((t0 - 0.08 - fb) / per);
+    if (fb + k0 * per < 0) k0++;
+    let k1 = Math.floor((t1 - 0.05 - fb) / per);
+    if (k1 < k0 + 2) k1 = Math.ceil((t1 - fb) / per);
+    song.sel = { start: fb + k0 * per, end: Math.min(dur, fb + Math.max(k1, k0 + 1) * per) };
+    song.lyrSel = i;
+    if (preview && preview.song === song) stopPreview();
+    song.el.querySelectorAll('.lyr-line').forEach((r, j) => r.classList.toggle('sel', j === i));
+    updateSelInfo(song); drawSong(song);
+  }
+  function highlightLyric(song, t) {
+    if (!song.lyrics) return;
+    const rows = song.el.querySelectorAll('.lyr-line');
+    song.lyrics.forEach((l, j) => rows[j] && rows[j].classList.toggle('now', t >= l.t + song.lyrOffset && t < l.end + song.lyrOffset));
   }
 
   // ================= Arrangement =================
@@ -857,8 +1020,10 @@
   }
   const overlaps = (lane, s, e, except) => P.clips.some(c => c !== except && c.lane === lane && c.start < e - 1e-6 && c.start + clipLen(c) > s + 1e-6);
 
-  function addClipFromSong(song, lane) {
-    const stem = song.tab;
+  // asLine: a lyric line, which uses the vocals when the song has been split and goes on
+  // Vocals 1 right after the previous line, on the same beat of the bar as in its song.
+  function addClipFromSong(song, lane, asLine = false) {
+    const stem = asLine && song.stems.vocals ? 'vocals' : song.tab;
     const buf = stemBuffer(song, stem);
     if (P.bpm == null) setProjectBpm(song.bpm, false);
     // Start a whole-song clip on its first detected beat so it lines up with the grid
@@ -871,6 +1036,13 @@
     if (lane === 0) {
       const end = P.clips.filter(c => c.lane === 0).reduce((m, c) => Math.max(m, c.start + clipLen(c)), 0);
       clip.start = Math.ceil(end / 4 - 1e-6) * 4;
+    } else if (asLine) {
+      const inBar = (((Math.round((sel.start - song.firstBeat) * clipSrcBpm(clip) / 60)) % 4) + 4) % 4;
+      const prev = P.clips.filter(c => c.lane === 1);
+      let b = prev.length ? Math.ceil(prev.reduce((m, c) => Math.max(m, c.start + clipLen(c)), 0) - 1e-6) : Math.max(0, Math.round(curBeat() / 4) * 4);
+      while (((b % 4) + 4) % 4 !== inBar) b++;
+      clip.start = b;
+      clip.semis = matchSemis(clip);
     } else {
       clip.start = Math.max(0, Math.round(curBeat() / 4) * 4);
       clip.lane = [1, 2, 3].find(l => !overlaps(l, clip.start, clip.start + len)) || 1;
@@ -1264,7 +1436,7 @@
   }
 
   function frame() {
-    if (preview) drawSong(preview.song);
+    if (preview) { drawSong(preview.song); highlightLyric(preview.song, preview.s0 + ctx.currentTime - preview.T0); }
     const b = curBeat();
     const end = projectEnd();
     if (P.playing && P.b0 != null && b >= end) { pause(); P.pausedBeat = 0; }
