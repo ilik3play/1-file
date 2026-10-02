@@ -769,48 +769,71 @@
 
   // ================= Vocal separation =================
   let separator = null;
-  // Load the model on the graphics card (WebGPU) if there is one. If that fails, or takes
-  // longer than GPU_TIMEOUT (some GPUs hang while compiling the model), use the processor.
+  // The AI model runs in a background worker so the page never freezes, even on the
+  // processor. It loads on the graphics card (WebGPU) if there is one; if that fails, or
+  // takes longer than GPU_TIMEOUT (some GPUs hang while compiling it), the worker is
+  // stopped and the model is loaded on the processor instead.
   const GPU_TIMEOUT = 60000;
-  let ortMod = null, DemucsCls = null;
+  const WORKER_SRC = `
+    let proc = null;
+    self.onmessage = async e => {
+      const m = e.data;
+      try {
+        if (m.type === 'load') {
+          const ort = await import(m.ortUrl);
+          ort.env.wasm.wasmPaths = m.ortBase;
+          ort.env.wasm.numThreads = 1;
+          const { DemucsProcessor } = await import(m.demucsUrl);
+          proc = new DemucsProcessor({ ort, sessionOptions: { executionProviders: m.eps } });
+          await proc.loadModel(m.model);
+          postMessage({ type: 'loaded' });
+        } else if (m.type === 'separate') {
+          proc.onProgress = p => postMessage({ type: 'progress', progress: p.progress });
+          const r = await proc.separate(m.L, m.R);
+          const res = {}, bufs = new Set();
+          for (const k of ['vocals', 'drums', 'bass', 'other']) {
+            res[k] = { left: r[k].left, right: r[k].right };
+            bufs.add(r[k].left.buffer); bufs.add(r[k].right.buffer);
+          }
+          postMessage({ type: 'done', res }, [...bufs]);
+        }
+      } catch (err) { postMessage({ type: 'error', message: String((err && err.message) || err) }); }
+    };`;
+  function workerCall(w, msg, transfer = [], onProgress) {
+    return new Promise((resolve, reject) => {
+      w.onmessage = e => {
+        const d = e.data;
+        if (d.type === 'progress') onProgress && onProgress(d.progress);
+        else if (d.type === 'error') reject(new Error(d.message));
+        else resolve(d);
+      };
+      w.onerror = e => { e.preventDefault(); reject(new Error(e.message || 'the AI worker stopped')); };
+      w.postMessage(msg, transfer);
+    });
+  }
   async function getSeparator(report, forceCpu = false) {
     if (separator && (!forceCpu || separator.cpu)) return separator;
-    report('Loading the AI engine…', null);
-    if (!ortMod) {
-      ortMod = await import(ORT_URL);
-      ortMod.env.wasm.wasmPaths = ORT_BASE;
-      ortMod.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
-      DemucsCls = (await import(DEMUCS_URL)).DemucsProcessor;
-    }
+    if (separator) { separator.worker.terminate(); separator = null; }
     const model = await fetchModel(report);
     let webgpu = false;
     if (!forceCpu) try { webgpu = !!(navigator.gpu && await navigator.gpu.requestAdapter()); } catch (_) {}
-    const start = async (eps, label, buf) => {
+    const start = async (eps, label, buf, timeout) => {
       const t0 = performance.now();
       const tick = () => report(`Starting the AI model ${label}… ${fmt((performance.now() - t0) / 1000)}`, null);
       tick(); const timer = setInterval(tick, 1000);
+      const worker = new Worker(URL.createObjectURL(new Blob([WORKER_SRC], { type: 'text/javascript' })), { type: 'module' });
       try {
-        const proc = new DemucsCls({ ort: ortMod, sessionOptions: { executionProviders: eps } });
-        await proc.loadModel(buf);
-        return proc;
-      } finally { clearInterval(timer); }
+        const load = workerCall(worker, { type: 'load', ortUrl: ORT_URL, ortBase: ORT_BASE, demucsUrl: DEMUCS_URL, eps, model: buf }, [buf]);
+        await (timeout ? Promise.race([load, new Promise((_, rej) => setTimeout(() => rej(new Error('timed out')), timeout))]) : load);
+        return { worker, cpu: eps[0] === 'wasm' };
+      } catch (err) { worker.terminate(); throw err; } finally { clearInterval(timer); }
     };
     let proc = null;
     if (webgpu) {
-      try {
-        // ONNX Runtime may take ownership of the buffer, so give the GPU attempt a copy
-        proc = await Promise.race([
-          start(['webgpu'], 'on your graphics card', model.slice(0)),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('timed out')), GPU_TIMEOUT))
-        ]);
-      } catch (err) {
-        console.warn('WebGPU failed, using the processor instead:', err);
-      }
+      try { proc = await start(['webgpu'], 'on your graphics card', model.slice(0), GPU_TIMEOUT); }
+      catch (err) { console.warn('WebGPU failed, using the processor instead:', err); }
     }
-    if (!proc) {
-      proc = await start(['wasm'], webgpu ? 'on the processor (the graphics card did not work)' : 'on the processor', model);
-      proc.cpu = true;
-    }
+    if (!proc) proc = await start(['wasm'], webgpu ? 'on the processor (the graphics card did not work)' : 'on the processor', model, 0);
     separator = proc;
     return proc;
   }
@@ -855,14 +878,14 @@
         const L = song.buffer.getChannelData(0), R = song.buffer.getChannelData(1);
         const t0 = performance.now();
         const run = async proc => {
-          proc.onProgress = ({ progress }) => {
+          const onProgress = progress => {
             const el = (performance.now() - t0) / 1000;
             const eta = progress > 0.05 ? ` (about ${fmt(el / progress - el)} left)` : '';
             report(`Splitting vocals from the music${proc.cpu ? ' on the processor' : ''}: ${Math.round(progress * 100)}%${eta}`, progress);
           };
           report('Splitting vocals from the music: 0%', 0);
-          await yieldUI();
-          const res = await proc.separate(L, R);
+          const l = L.slice(), r = R.slice();
+          const { res } = await workerCall(proc.worker, { type: 'separate', L: l, R: r }, [l.buffer, r.buffer], onProgress);
           // Some GPUs return NaNs instead of failing outright
           if (!res.vocals.left.slice(0, 441000).every(Number.isFinite)) throw new Error('the graphics card returned invalid audio');
           return res;
