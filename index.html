@@ -1,0 +1,767 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SongSync</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --line: #2a2f3a;
+    --text: #e7e9ee;
+    --muted: #8b93a3;
+    --a: #3ec7c2;
+    --b: #f39a4a;
+    --accent: #9b8cff;
+    --danger: #ff6b6b;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: .3px; }
+  header p { margin: 0; color: var(--muted); }
+  .decks { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 820px) { .decks { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; min-width: 0; }
+  .deck[data-deck="0"] { --c: var(--a); }
+  .deck[data-deck="1"] { --c: var(--b); }
+  .deck-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .badge { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
+    background: var(--c); color: #111; font-weight: 700; flex: none; }
+  .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .name.loaded { color: var(--text); }
+  .drop { display: block; border: 1.5px dashed var(--line); border-radius: 10px; padding: 14px; text-align: center;
+    color: var(--muted); cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop:hover, .drop.over { border-color: var(--c); background: var(--panel-2); }
+  .drop input { display: none; }
+  canvas { display: block; width: 100%; border-radius: 8px; background: var(--panel-2); }
+  .wave { height: 84px; margin: 10px 0; cursor: pointer; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .row label { color: var(--muted); min-width: 70px; }
+  .grow { flex: 1; min-width: 120px; }
+  input[type=number] { width: 88px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 8px; font: inherit; }
+  input[type=range] { accent-color: var(--c, var(--accent)); }
+  button { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 10px; font: inherit; cursor: pointer; white-space: nowrap; }
+  button:hover:not(:disabled) { border-color: var(--c, var(--accent)); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .status { color: var(--muted); font-size: 12px; min-height: 18px; }
+  .master { margin-top: 14px; }
+  .transport { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .transport .big { font-size: 16px; padding: 8px 18px; }
+  .time { font-variant-numeric: tabular-nums; color: var(--muted); margin-left: auto; }
+  #seek { width: 100%; margin: 12px 0 4px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; margin-top: 10px; }
+  @media (max-width: 820px) { .grid2 { grid-template-columns: 1fr; } }
+  #syncView { height: 120px; margin-top: 12px; }
+  .xf { display: flex; align-items: center; gap: 8px; }
+  .xf span { font-weight: 700; }
+  .xf .la { color: var(--a); } .xf .lb { color: var(--b); }
+  .xf input { flex: 1; accent-color: var(--accent); }
+  .tag { font-size: 12px; color: var(--muted); }
+  a#download { color: var(--accent); }
+  kbd { background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>SongSync</h1>
+    <p>Load two songs. Their tempos and beats get matched so you can mix and export them.</p>
+  </header>
+
+  <section class="decks">
+    <!-- Deck template is cloned by script -->
+  </section>
+
+  <section class="card master">
+    <div class="transport">
+      <button id="play" class="primary big" disabled>▶ Play</button>
+      <button id="toStart" disabled>⏮ Start</button>
+      <button id="toB" disabled title="Jump to just before song B comes in">Jump to B entry</button>
+      <span class="time" id="time">0:00 / 0:00</span>
+    </div>
+    <input id="seek" type="range" min="0" max="1000" value="0" step="1" disabled>
+
+    <div class="grid2">
+      <div>
+        <div class="row">
+          <label for="target">Mix BPM</label>
+          <input id="target" type="number" min="40" max="250" step="0.1" value="120">
+          <input id="targetRange" class="grow" type="range" min="60" max="200" step="0.1" value="120">
+          <button id="targetA" disabled>= A</button>
+          <button id="targetB" disabled>= B</button>
+        </div>
+        <div class="row">
+          <label for="enter">B enters</label>
+          <button data-enter="-4">−1 bar</button>
+          <button data-enter="-1">−1 beat</button>
+          <input id="enter" type="number" step="1" value="0" title="The beat of song A where song B's first beat lands">
+          <button data-enter="1">+1 beat</button>
+          <button data-enter="4">+1 bar</button>
+          <span class="tag">beat of song A</span>
+        </div>
+        <div class="row">
+          <label for="nudge">Nudge B</label>
+          <button data-nudge="-10">−10ms</button>
+          <input id="nudge" class="grow" type="range" min="-250" max="250" step="1" value="0" style="--c: var(--b)">
+          <button data-nudge="10">+10ms</button>
+          <span class="tag" id="nudgeVal">0 ms</span>
+        </div>
+      </div>
+      <div>
+        <div class="row xf">
+          <span class="la">A</span>
+          <input id="xfade" type="range" min="0" max="1" step="0.01" value="0.5" aria-label="Crossfader">
+          <span class="lb">B</span>
+        </div>
+        <div class="row">
+          <button id="export" disabled>⬇ Export mix (WAV)</button>
+          <a id="download" hidden></a>
+        </div>
+        <div class="status" id="exportStatus"></div>
+        <p class="hint">Changing the tempo also changes the pitch, the same way a turntable does.
+          <kbd>Space</kbd> plays or pauses. <kbd>←</kbd>/<kbd>→</kbd> nudges song B by 5&nbsp;ms.</p>
+      </div>
+    </div>
+
+    <canvas id="syncView" aria-label="Beat alignment view"></canvas>
+    <p class="hint">Beat alignment view. The center line is the playhead. When the songs are in sync, the peaks of A (top) and B (bottom) line up on the same vertical grid lines.</p>
+  </section>
+</main>
+
+<template id="deckTpl">
+  <div class="card deck">
+    <div class="deck-head">
+      <div class="badge"></div>
+      <div class="name">No song loaded</div>
+    </div>
+    <label class="drop">
+      <input type="file" accept="audio/*">
+      <span class="drop-text">Drop an audio file here, or click to choose one</span>
+    </label>
+    <canvas class="wave"></canvas>
+    <div class="status analysis"></div>
+    <div class="row">
+      <label>BPM</label>
+      <input class="bpm" type="number" min="30" max="300" step="0.01" value="" disabled>
+      <button class="half" disabled>÷2</button>
+      <button class="double" disabled>×2</button>
+      <button class="tap" disabled title="Tap along to the beat (4 or more taps)">Tap</button>
+      <button class="mark" disabled title="Press during playback, exactly on a beat of this song, to move its beat grid there">Mark beat</button>
+    </div>
+    <div class="row">
+      <label>Volume</label>
+      <input class="vol grow" type="range" min="0" max="1.5" step="0.01" value="1">
+      <span class="tag rate"></span>
+    </div>
+  </div>
+</template>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- State ----------
+  const HOP = 256, WIN = 512;
+  let ctx = null;
+  const decks = [0, 1].map(i => ({
+    i, buffer: null, name: '', bpm: 120, firstBeat: 0,
+    onset: null, onsetRate: 0, peaks: null,
+    gain: null, src: null, vol: 1, taps: [], el: null
+  }));
+  const S = {
+    target: 120, enterBeat: 0, nudge: 0, xfade: 0.5,
+    playing: false, g0: 0, T0: 0, gPaused: null
+  };
+
+  const $ = sel => document.querySelector(sel);
+
+  // ---------- Audio context ----------
+  function ensureCtx() {
+    if (ctx) return ctx;
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    for (const d of decks) {
+      d.gain = ctx.createGain();
+      d.gain.connect(ctx.destination);
+    }
+    applyGains();
+    return ctx;
+  }
+
+  // ---------- Beat analysis ----------
+  // Onset-strength envelope: log-RMS rise per frame, minus a local mean.
+  function onsetEnvelope(data) {
+    const n = Math.max(0, Math.floor((data.length - WIN) / HOP) + 1);
+    const e = new Float32Array(n);
+    for (let f = 0; f < n; f++) {
+      let s = 0;
+      const o = f * HOP;
+      for (let k = 0; k < WIN; k++) { const v = data[o + k]; s += v * v; }
+      e[f] = Math.log1p(1000 * Math.sqrt(s / WIN));
+    }
+    const d = new Float32Array(n);
+    for (let f = 1; f < n; f++) d[f] = Math.max(0, e[f] - e[f - 1]);
+    // subtract moving average (~0.4 s) and clip, then normalise
+    const R = 35;
+    const out = new Float32Array(n);
+    let acc = 0, max = 1e-9;
+    for (let f = 0; f < Math.min(n, R); f++) acc += d[f];
+    for (let f = 0; f < n; f++) {
+      if (f + R < n) acc += d[f + R];
+      if (f - R - 1 >= 0) acc -= d[f - R - 1];
+      const cnt = Math.min(n - 1, f + R) - Math.max(0, f - R) + 1;
+      const v = Math.max(0, d[f] - acc / cnt);
+      out[f] = v; if (v > max) max = v;
+    }
+    for (let f = 0; f < n; f++) out[f] /= max;
+    return out;
+  }
+
+  async function analyze(buffer) {
+    const sr = buffer.sampleRate;
+    const len = buffer.length;
+    // mono mix
+    const mono = new Float32Array(len);
+    for (let c = 0; c < buffer.numberOfChannels; c++) {
+      const ch = buffer.getChannelData(c);
+      for (let k = 0; k < len; k++) mono[k] += ch[k] / buffer.numberOfChannels;
+    }
+    // low-passed copy (kick drum emphasis)
+    const off = new OfflineAudioContext(1, len, sr);
+    const mb = off.createBuffer(1, len, sr); mb.copyToChannel(mono, 0);
+    const src = off.createBufferSource(); src.buffer = mb;
+    const lp = off.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 160;
+    src.connect(lp).connect(off.destination); src.start();
+    const low = (await off.startRendering()).getChannelData(0);
+
+    const oFull = onsetEnvelope(mono);
+    const oLow = onsetEnvelope(low);
+    const n = Math.min(oFull.length, oLow.length);
+    const o = new Float32Array(n);
+    for (let f = 0; f < n; f++) o[f] = 0.6 * oLow[f] + 0.4 * oFull[f];
+    // light smoothing
+    const os = new Float32Array(n);
+    for (let f = 1; f < n - 1; f++) os[f] = 0.25 * o[f - 1] + 0.5 * o[f] + 0.25 * o[f + 1];
+
+    const fps = sr / HOP;
+    // --- tempo via autocorrelation with a mild prior around 120 BPM ---
+    const Lmin = Math.floor(fps * 60 / 200), Lmax = Math.ceil(fps * 60 / 60);
+    const N = Math.min(n, Math.floor(fps * 240)); // first 4 minutes is plenty
+    let mean = 0; for (let f = 0; f < N; f++) mean += os[f]; mean /= Math.max(1, N);
+    const z = new Float32Array(N); for (let f = 0; f < N; f++) z[f] = os[f] - mean;
+    const ac = L => { let s = 0; for (let f = 0; f + L < N; f++) s += z[f] * z[f + L]; return s / (N - L); };
+    const acCache = new Map();
+    const AC = L => { if (!acCache.has(L)) acCache.set(L, ac(L)); return acCache.get(L); };
+    let bestL = Lmin, bestScore = -Infinity;
+    for (let L = Lmin; L <= Lmax; L++) {
+      const bpm = 60 * fps / L;
+      const prior = Math.exp(-0.5 * Math.pow(Math.log2(bpm / 120) / 0.8, 2));
+      const score = (AC(L) + 0.5 * AC(2 * L) + 0.25 * AC(4 * L)) * prior;
+      if (score > bestScore) { bestScore = score; bestL = L; }
+    }
+
+    // --- fine tempo + phase: comb fit over the whole track ---
+    function combFit(P) {
+      let best = -1, bestPhi = 0;
+      const steps = Math.ceil(P);
+      for (let phi = 0; phi < steps; phi++) {
+        let s = 0;
+        for (let t = phi; t < n - 1; t += P) {
+          const k = Math.floor(t), fr = t - k;
+          s += os[k] * (1 - fr) + os[k + 1] * fr;
+        }
+        if (s > best) { best = s; bestPhi = phi; }
+      }
+      // sub-frame phase refinement
+      for (let phi = bestPhi - 1; phi <= bestPhi + 1; phi += 0.125) {
+        if (phi < 0) continue;
+        let s = 0;
+        for (let t = phi; t < n - 1; t += P) {
+          const k = Math.floor(t), fr = t - k;
+          s += os[k] * (1 - fr) + os[k + 1] * fr;
+        }
+        if (s > best) { best = s; bestPhi = phi; }
+      }
+      return { score: best / Math.max(1, (n / P)), phi: bestPhi };
+    }
+    let bestP = bestL, fit = combFit(bestL);
+    for (const step of [0.05, 0.005]) {
+      const lo = bestP - (step === 0.05 ? 1.2 : 0.06), hi = bestP + (step === 0.05 ? 1.2 : 0.06);
+      for (let P = lo; P <= hi; P += step) {
+        const r = combFit(P);
+        if (r.score > fit.score) { fit = r; bestP = P; }
+      }
+    }
+    let bpm = 60 * fps / bestP;
+    if (Math.abs(bpm - Math.round(bpm)) < 0.04) bpm = Math.round(bpm);
+    // onset of frame f is detected when the rise enters the analysis window
+    let firstBeat = (fit.phi * HOP + 0.57 * WIN) / sr;
+    const period = 60 / bpm;
+    firstBeat = ((firstBeat % period) + period) % period;
+
+    return { bpm: +bpm.toFixed(2), firstBeat, onset: os, onsetRate: fps };
+  }
+
+  function computePeaks(buffer, cols = 1200) {
+    const ch = buffer.getChannelData(0);
+    const ch2 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : ch;
+    const per = Math.max(1, Math.floor(buffer.length / cols));
+    const peaks = new Float32Array(cols);
+    for (let c = 0; c < cols; c++) {
+      let m = 0;
+      const o = c * per;
+      for (let k = 0; k < per; k += 4) {
+        const v = Math.abs(ch[o + k] || 0) + Math.abs(ch2[o + k] || 0);
+        if (v > m) m = v;
+      }
+      peaks[c] = m / 2;
+    }
+    return peaks;
+  }
+
+  // ---------- Timeline math ----------
+  // Global position g is measured in beats of song A (0 = A's first detected beat).
+  const loaded = () => decks.filter(d => d.buffer);
+  function effBpm(d) {
+    if (d.i === 0 || !decks[0].buffer) return d.bpm;
+    // count B in halves/doubles if that is closer to A's tempo
+    let b = d.bpm, a = decks[0].bpm;
+    while (b / a > 1.45) b /= 2;
+    while (a / b > 1.45) b *= 2;
+    return b;
+  }
+  const enterOf = d => d.i === 0 ? 0 : S.enterBeat;
+  const nudgeOf = d => d.i === 0 ? 0 : S.nudge;
+  const posAt = (d, g) => d.firstBeat + (g - enterOf(d)) * 60 / effBpm(d) + nudgeOf(d);
+  const gAtPos = (d, s) => enterOf(d) + (s - d.firstBeat - nudgeOf(d)) * effBpm(d) / 60;
+  const rateOf = d => S.target / effBpm(d);
+  function range() {
+    const L = loaded();
+    if (!L.length) return [0, 0];
+    let lo = Infinity, hi = -Infinity;
+    for (const d of L) {
+      lo = Math.min(lo, gAtPos(d, 0));
+      hi = Math.max(hi, gAtPos(d, d.buffer.duration));
+    }
+    return [lo, hi];
+  }
+  const curG = () => S.playing ? S.g0 + (ctx.currentTime - S.T0) * S.target / 60 : S.gPaused;
+  const gToSec = g => (g - range()[0]) * 60 / S.target;
+
+  // ---------- Transport ----------
+  function startSources(g) {
+    S.T0 = ctx.currentTime + 0.04;
+    S.g0 = g;
+    for (const d of loaded()) {
+      const s = posAt(d, g), r = rateOf(d);
+      if (s >= d.buffer.duration) continue;
+      const src = ctx.createBufferSource();
+      src.buffer = d.buffer;
+      src.playbackRate.value = r;
+      src.connect(d.gain);
+      if (s < 0) { src.start(S.T0 + (-s) / r, 0); d.pending = true; }
+      else { src.start(S.T0, s); d.pending = false; }
+      d.src = src;
+    }
+  }
+  function stopSources() {
+    for (const d of decks) {
+      if (d.src) { try { d.src.stop(); } catch (_) {} d.src.disconnect(); d.src = null; }
+    }
+  }
+  function play() {
+    if (!loaded().length) return;
+    ensureCtx(); ctx.resume();
+    const [lo, hi] = range();
+    if (S.gPaused == null || S.gPaused >= hi) S.gPaused = lo;
+    startSources(S.gPaused);
+    S.playing = true;
+    updateUI();
+  }
+  function pause() {
+    if (!S.playing) return;
+    S.gPaused = curG();
+    stopSources();
+    S.playing = false;
+    updateUI();
+  }
+  function seek(g) {
+    const [lo, hi] = range();
+    g = Math.max(lo, Math.min(hi, g));
+    if (S.playing) { stopSources(); startSources(g); }
+    else S.gPaused = g;
+  }
+  // re-place everything after an alignment change, keeping position g
+  function resync(g = curG()) {
+    if (g == null) return;
+    if (S.playing) { stopSources(); startSources(g); }
+    else S.gPaused = g;
+    updateUI();
+  }
+  function setTarget(v) {
+    v = Math.max(40, Math.min(250, +v || 120));
+    if (S.playing) {
+      const g = curG();
+      if (decks.some(d => d.src && d.pending)) {
+        S.target = v; resync(g);
+      } else {
+        const now = ctx.currentTime;
+        S.target = v; S.g0 = g; S.T0 = now;
+        for (const d of loaded()) if (d.src) d.src.playbackRate.setValueAtTime(rateOf(d), now);
+      }
+    } else S.target = v;
+    $('#target').value = +v.toFixed(2);
+    $('#targetRange').value = v;
+    updateUI();
+  }
+  function applyGains() {
+    if (!ctx) return;
+    const x = S.xfade;
+    const gA = Math.cos(x * Math.PI / 2) * decks[0].vol;
+    const gB = Math.sin(x * Math.PI / 2) * decks[1].vol;
+    decks[0].gain.gain.setTargetAtTime(gA, ctx.currentTime, 0.01);
+    decks[1].gain.gain.setTargetAtTime(gB, ctx.currentTime, 0.01);
+  }
+
+  // ---------- Loading ----------
+  async function loadFile(d, file) {
+    ensureCtx();
+    const st = d.el.querySelector('.analysis');
+    st.textContent = 'Decoding…';
+    try {
+      const arr = await file.arrayBuffer();
+      const buf = await ctx.decodeAudioData(arr);
+      st.textContent = 'Finding the tempo and beats…';
+      await new Promise(r => setTimeout(r, 20));
+      const res = await analyze(buf);
+      const g = S.gPaused;
+      if (S.playing) pause();
+      d.buffer = buf; d.name = file.name;
+      d.bpm = res.bpm; d.firstBeat = res.firstBeat;
+      d.onset = res.onset; d.onsetRate = res.onsetRate;
+      d.peaks = computePeaks(buf);
+      st.textContent = `Detected ${res.bpm} BPM. First beat at ${res.firstBeat.toFixed(3)} s.`;
+      if (d.i === 0 || !decks[0].buffer) setTarget(d.bpm);
+      S.gPaused = g == null ? range()[0] : Math.max(range()[0], Math.min(range()[1], g));
+      updateUI();
+    } catch (err) {
+      console.error(err);
+      st.textContent = 'This file could not be read. Try an MP3, WAV, OGG or M4A file.';
+    }
+  }
+
+  // ---------- Export ----------
+  function encodeWav(ab) {
+    const nCh = ab.numberOfChannels, len = ab.length, sr = ab.sampleRate;
+    const bytes = 44 + len * nCh * 2;
+    const buf = new ArrayBuffer(bytes), v = new DataView(buf);
+    const w = (o, s) => { for (let k = 0; k < s.length; k++) v.setUint8(o + k, s.charCodeAt(k)); };
+    w(0, 'RIFF'); v.setUint32(4, bytes - 8, true); w(8, 'WAVE'); w(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, nCh, true);
+    v.setUint32(24, sr, true); v.setUint32(28, sr * nCh * 2, true); v.setUint16(32, nCh * 2, true);
+    v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, len * nCh * 2, true);
+    const chans = []; for (let c = 0; c < nCh; c++) chans.push(ab.getChannelData(c));
+    let o = 44;
+    for (let k = 0; k < len; k++) for (let c = 0; c < nCh; c++) {
+      const s = Math.max(-1, Math.min(1, chans[c][k]));
+      v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true); o += 2;
+    }
+    return new Blob([buf], { type: 'audio/wav' });
+  }
+  async function exportMix() {
+    const btn = $('#export'), st = $('#exportStatus');
+    btn.disabled = true; st.textContent = 'Rendering the mix…';
+    try {
+      const [lo, hi] = range();
+      const sr = 44100;
+      const secs = (hi - lo) * 60 / S.target;
+      const off = new OfflineAudioContext(2, Math.ceil(secs * sr) + sr, sr);
+      const x = S.xfade;
+      const gains = [Math.cos(x * Math.PI / 2) * decks[0].vol, Math.sin(x * Math.PI / 2) * decks[1].vol];
+      for (const d of loaded()) {
+        const g = off.createGain(); g.gain.value = gains[d.i]; g.connect(off.destination);
+        const src = off.createBufferSource(); src.buffer = d.buffer;
+        const r = rateOf(d); src.playbackRate.value = r; src.connect(g);
+        const s = posAt(d, lo);
+        if (s < 0) src.start((-s) / r, 0); else src.start(0, s);
+      }
+      const out = await off.startRendering();
+      // normalise if clipping
+      let peak = 0;
+      for (let c = 0; c < 2; c++) { const ch = out.getChannelData(c); for (let k = 0; k < ch.length; k++) { const a = Math.abs(ch[k]); if (a > peak) peak = a; } }
+      if (peak > 0.99) for (let c = 0; c < 2; c++) { const ch = out.getChannelData(c); const m = 0.99 / peak; for (let k = 0; k < ch.length; k++) ch[k] *= m; }
+      const blob = encodeWav(out);
+      const a = $('#download');
+      if (a.href) URL.revokeObjectURL(a.href);
+      a.href = URL.createObjectURL(blob);
+      const base = loaded().map(d => d.name.replace(/\.[^.]+$/, '')).join(' x ');
+      a.download = `${base} (${+S.target.toFixed(2)} BPM).wav`;
+      a.textContent = 'Download ' + a.download;
+      a.hidden = false;
+      st.textContent = `Done: ${fmt(secs)} at ${+S.target.toFixed(2)} BPM.`;
+    } catch (err) {
+      console.error(err); st.textContent = 'Export failed: ' + err.message;
+    }
+    btn.disabled = false;
+  }
+
+  // ---------- UI ----------
+  const fmt = s => { s = Math.max(0, s); return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0'); };
+
+  function buildDecks() {
+    const host = $('.decks'), tpl = $('#deckTpl');
+    for (const d of decks) {
+      const el = tpl.content.firstElementChild.cloneNode(true);
+      el.dataset.deck = d.i;
+      el.querySelector('.badge').textContent = 'AB'[d.i];
+      d.el = el;
+      host.appendChild(el);
+      const input = el.querySelector('input[type=file]'), drop = el.querySelector('.drop');
+      input.addEventListener('change', () => input.files[0] && loadFile(d, input.files[0]));
+      drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+      drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+      drop.addEventListener('drop', e => {
+        e.preventDefault(); drop.classList.remove('over');
+        const f = e.dataTransfer.files[0]; if (f) loadFile(d, f);
+      });
+      const bpmIn = el.querySelector('.bpm');
+      bpmIn.addEventListener('change', () => setBpm(d, +bpmIn.value));
+      el.querySelector('.half').addEventListener('click', () => setBpm(d, d.bpm / 2));
+      el.querySelector('.double').addEventListener('click', () => setBpm(d, d.bpm * 2));
+      el.querySelector('.tap').addEventListener('click', () => tap(d));
+      el.querySelector('.mark').addEventListener('click', () => markBeat(d));
+      el.querySelector('.vol').addEventListener('input', e => { d.vol = +e.target.value; applyGains(); });
+      el.querySelector('.wave').addEventListener('click', e => {
+        if (!d.buffer) return;
+        const r = e.currentTarget.getBoundingClientRect();
+        seek(gAtPos(d, (e.clientX - r.left) / r.width * d.buffer.duration));
+        updateUI();
+      });
+    }
+  }
+
+  function setBpm(d, v) {
+    if (!d.buffer || !(v >= 30 && v <= 300)) { updateUI(); return; }
+    // keep this deck's current playback position under the playhead
+    const g = curG();
+    const s = g != null ? posAt(d, g) : null;
+    const wasA = d.i === 0;
+    const oldTargetMatchesA = wasA && Math.abs(S.target - d.bpm) < 1e-6;
+    d.bpm = +v.toFixed(2);
+    if (oldTargetMatchesA) S.target = d.bpm;
+    resync(wasA && s != null ? gAtPos(d, s) : g);
+    setTarget(S.target);
+  }
+
+  function tap(d) {
+    const now = performance.now();
+    if (d.taps.length && now - d.taps[d.taps.length - 1] > 2000) d.taps = [];
+    d.taps.push(now);
+    if (d.taps.length > 9) d.taps.shift();
+    const btn = d.el.querySelector('.tap');
+    if (d.taps.length >= 4) {
+      const iv = (d.taps[d.taps.length - 1] - d.taps[0]) / (d.taps.length - 1);
+      setBpm(d, 60000 / iv);
+      btn.textContent = 'Tap ✓';
+    } else btn.textContent = `Tap ${d.taps.length}/4`;
+  }
+
+  function markBeat(d) {
+    const g = curG();
+    if (!d.buffer || g == null) return;
+    const s = posAt(d, g);
+    const p = 60 / d.bpm;
+    d.firstBeat = ((s % p) + p) % p;
+    // song A keeps its place; song B snaps its new beat onto A's grid
+    resync(d.i === 0 ? gAtPos(d, s) : g);
+  }
+
+  function updateUI() {
+    const any = loaded().length > 0;
+    for (const d of decks) {
+      const el = d.el, on = !!d.buffer;
+      const nm = el.querySelector('.name');
+      nm.textContent = on ? d.name : 'No song loaded'; nm.classList.toggle('loaded', on);
+      nm.title = on ? d.name : '';
+      el.querySelector('.drop-text').textContent = on ? 'Replace song (drop or click)' : 'Drop an audio file here, or click to choose one';
+      const bpmIn = el.querySelector('.bpm');
+      if (document.activeElement !== bpmIn) bpmIn.value = on ? d.bpm : '';
+      for (const sel of ['.bpm', '.half', '.double', '.tap']) el.querySelector(sel).disabled = !on;
+      el.querySelector('.mark').disabled = !(on && S.playing);
+      const eff = effBpm(d);
+      el.querySelector('.rate').textContent = on
+        ? `plays at ${(rateOf(d) * 100).toFixed(1)}% speed` + (Math.abs(eff - d.bpm) > 0.01 ? ` (counted as ${+eff.toFixed(2)} BPM)` : '')
+        : '';
+    }
+    $('#play').disabled = !any;
+    $('#play').textContent = S.playing ? '❚❚ Pause' : '▶ Play';
+    $('#toStart').disabled = !any;
+    $('#toB').disabled = !(decks[0].buffer && decks[1].buffer);
+    $('#seek').disabled = !any;
+    $('#export').disabled = !any;
+    $('#targetA').disabled = !decks[0].buffer;
+    $('#targetB').disabled = !decks[1].buffer;
+    $('#enter').value = S.enterBeat;
+    $('#nudge').value = Math.round(S.nudge * 1000);
+    $('#nudgeVal').textContent = `${Math.round(S.nudge * 1000)} ms`;
+  }
+
+  function bindMaster() {
+    $('#play').addEventListener('click', () => S.playing ? pause() : play());
+    $('#toStart').addEventListener('click', () => { seek(range()[0]); updateUI(); });
+    $('#toB').addEventListener('click', () => {
+      const d = decks[1];
+      seek(Math.max(range()[0], gAtPos(d, 0) - 16)); // 4 bars before B starts
+      if (!S.playing) play();
+    });
+    $('#seek').addEventListener('input', e => {
+      const [lo, hi] = range();
+      seek(lo + (hi - lo) * e.target.value / 1000);
+    });
+    $('#target').addEventListener('change', e => setTarget(e.target.value));
+    $('#targetRange').addEventListener('input', e => setTarget(e.target.value));
+    $('#targetA').addEventListener('click', () => setTarget(decks[0].bpm));
+    $('#targetB').addEventListener('click', () => setTarget(effBpm(decks[1])));
+    $('#enter').addEventListener('change', e => { setEnter(Math.round(+e.target.value || 0)); });
+    document.querySelectorAll('[data-enter]').forEach(b =>
+      b.addEventListener('click', () => setEnter(S.enterBeat + +b.dataset.enter)));
+    $('#nudge').addEventListener('input', e => setNudge(+e.target.value / 1000));
+    document.querySelectorAll('[data-nudge]').forEach(b =>
+      b.addEventListener('click', () => setNudge(S.nudge + +b.dataset.nudge / 1000)));
+    $('#xfade').addEventListener('input', e => { S.xfade = +e.target.value; applyGains(); });
+    $('#export').addEventListener('click', exportMix);
+    document.addEventListener('keydown', e => {
+      if (e.target.matches('input[type=number]')) return;
+      if (e.code === 'Space') { e.preventDefault(); S.playing ? pause() : play(); }
+      else if (e.code === 'ArrowLeft' && decks[1].buffer) { e.preventDefault(); setNudge(S.nudge - 0.005); }
+      else if (e.code === 'ArrowRight' && decks[1].buffer) { e.preventDefault(); setNudge(S.nudge + 0.005); }
+    });
+  }
+  function setEnter(v) { S.enterBeat = v; resync(); }
+  function setNudge(v) { S.nudge = Math.max(-0.25, Math.min(0.25, v)); resync(); }
+
+  // ---------- Drawing ----------
+  function fitCanvas(c) {
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(c.clientWidth * dpr), h = Math.round(c.clientHeight * dpr);
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    return [c.getContext('2d'), w, h, dpr];
+  }
+  const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  function drawDeck(d, g) {
+    const c = d.el.querySelector('.wave');
+    const [x, w, h, dpr] = fitCanvas(c);
+    x.clearRect(0, 0, w, h);
+    if (!d.buffer) return;
+    const color = css(d.i ? '--b' : '--a');
+    const dur = d.buffer.duration;
+    // beat grid (bars only, to keep it readable)
+    const p = 60 / d.bpm;
+    x.fillStyle = 'rgba(255,255,255,0.07)';
+    for (let t = d.firstBeat, k = 0; t < dur; t += p, k++) {
+      if (k % 4) continue;
+      x.fillRect(Math.round(t / dur * w), 0, dpr, h);
+    }
+    // waveform
+    x.fillStyle = color; x.globalAlpha = 0.85;
+    const P = d.peaks, mid = h / 2;
+    for (let px = 0; px < w; px++) {
+      const v = P[Math.floor(px / w * P.length)] * (h * 0.46);
+      x.fillRect(px, mid - v, 1, Math.max(1, v * 2));
+    }
+    x.globalAlpha = 1;
+    // playhead
+    if (g != null) {
+      const s = posAt(d, g);
+      if (s >= 0 && s <= dur) {
+        const px = s / dur * w;
+        x.fillStyle = 'rgba(0,0,0,0.45)'; x.fillRect(0, 0, px, h);
+        x.fillStyle = '#fff'; x.fillRect(px - dpr / 2, 0, dpr * 1.5, h);
+      } else if (s < 0) {
+        x.fillStyle = css('--muted'); x.font = `${11 * dpr}px system-ui`;
+        x.fillText(`starts in ${(-s / rateOf(d)).toFixed(1)} s`, 6 * dpr, 14 * dpr);
+      }
+    }
+  }
+
+  function drawSync(g) {
+    const c = $('#syncView');
+    const [x, w, h, dpr] = fitCanvas(c);
+    x.clearRect(0, 0, w, h);
+    if (g == null || !loaded().length) {
+      x.fillStyle = css('--muted'); x.font = `${12 * dpr}px system-ui`;
+      x.fillText('Load a song to see its beats here', 10 * dpr, h / 2);
+      return;
+    }
+    const span = 4; // beats each side
+    const gx = px => g - span + (px / w) * span * 2;
+    const xg = gg => (gg - (g - span)) / (span * 2) * w;
+    // A beat grid lines across whole view
+    for (let k = Math.ceil(g - span); k <= g + span; k++) {
+      const isBar = ((k % 4) + 4) % 4 === 0;
+      x.fillStyle = isBar ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.1)';
+      x.fillRect(Math.round(xg(k)), 0, isBar ? 2 * dpr : dpr, h);
+    }
+    const rowH = h / 2;
+    for (const d of decks) {
+      const top = d.i * rowH;
+      x.fillStyle = 'rgba(255,255,255,0.04)'; x.fillRect(0, top + rowH - dpr, w, dpr);
+      if (!d.buffer) continue;
+      const color = css(d.i ? '--b' : '--a');
+      x.fillStyle = color;
+      for (let px = 0; px < w; px += 2) {
+        const s = posAt(d, gx(px));
+        const f = Math.round(s * d.onsetRate);
+        if (f < 0 || f >= d.onset.length) continue;
+        let v = 0; for (let k = -1; k <= 1; k++) v = Math.max(v, d.onset[f + k] || 0);
+        const bh = Math.min(1, v * 1.4) * (rowH - 8 * dpr);
+        if (d.i === 0) x.fillRect(px, top + rowH - 2 * dpr - bh, 2, bh);
+        else x.fillRect(px, top + 2 * dpr, 2, bh);
+      }
+      // this deck's own beat ticks
+      // this deck's beats sit at g = enter + k - nudge (in beats)
+      const off = enterOf(d) - nudgeOf(d) * effBpm(d) / 60;
+      for (let k = Math.floor(g - span - off) - 1; k <= g + span - off + 1; k++) {
+        const px = xg(off + k);
+        x.fillRect(px - dpr, d.i === 0 ? top : top + rowH - 5 * dpr, 2 * dpr, 5 * dpr);
+      }
+      x.font = `600 ${11 * dpr}px system-ui`;
+      x.fillText('AB'[d.i], 6 * dpr, d.i === 0 ? top + 14 * dpr : top + rowH - 6 * dpr);
+    }
+    x.fillStyle = '#fff'; x.fillRect(w / 2 - dpr / 2, 0, dpr * 1.5, h);
+  }
+
+  function frame() {
+    let g = curG();
+    const [lo, hi] = range();
+    if (S.playing && g >= hi) { pause(); S.gPaused = lo; g = lo; updateUI(); }
+    for (const d of decks) drawDeck(d, g);
+    drawSync(g);
+    if (loaded().length) {
+      $('#time').textContent = `${fmt(gToSec(g))} / ${fmt(gToSec(hi))}`;
+      if (document.activeElement !== $('#seek')) $('#seek').value = hi > lo ? Math.round((g - lo) / (hi - lo) * 1000) : 0;
+    }
+    requestAnimationFrame(frame);
+  }
+
+  buildDecks();
+  bindMaster();
+  updateUI();
+  requestAnimationFrame(frame);
+
+  // exposed for automated testing
+  window.__songsync = { decks, S, range, posAt, analyze };
+})();
+</script>
+</body>
+</html>
