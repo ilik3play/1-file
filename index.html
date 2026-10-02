@@ -532,6 +532,15 @@
   function stemBuffer(song, stem) {
     return stem === 'vocals' ? song.stems.vocals : stem === 'inst' ? song.stems.inst : song.buffer;
   }
+  // Where to read `stem` audio for song time s0..s1: the whole-song stems if the song has
+  // been split, otherwise a section split just for a clip. Returns { buf, off } (off = the
+  // song time at the start of buf), or null if that stretch has not been split yet.
+  function stemSource(song, stem, s0, s1) {
+    if (stem === 'full') return { buf: song.buffer, off: 0 };
+    if (song.stems[stem]) return { buf: song.stems[stem], off: 0 };
+    const part = song.parts.find(p => p.s0 <= s0 + 1e-3 && p.s1 >= s1 - 1e-3);
+    return part ? { buf: part[stem], off: part.s0 } : null;
+  }
 
   async function addFiles(files) {
     for (const file of files) {
@@ -547,7 +556,7 @@
       id: nextSongId++, name, color: COLORS[(nextSongId - 2) % COLORS.length],
       buffer: null, bpm: 120, firstBeat: 0, key: null, ver: 1,
       stems: { vocals: null, inst: null }, peaks: {}, tab: 'full', sel: null, splitting: false,
-      meta, lyrics: null, lyrOffset: 0, lyrSel: -1
+      meta, lyrics: null, lyrOffset: 0, lyrSel: -1, parts: [], pending: []
     };
     songs.push(song);
     buildSongCard(song);
@@ -864,48 +873,58 @@
     return buf.buffer;
   }
 
+  // Runs the AI model on samples i0..i1 of the song (on the graphics card, falling back to
+  // the processor) and returns { vocals: [L, R], inst: [L, R] }.
+  async function separateSamples(song, i0, i1, report, label) {
+    const t0 = performance.now();
+    const run = async proc => {
+      const onProgress = progress => {
+        const el = (performance.now() - t0) / 1000;
+        const eta = progress > 0.05 ? ` (about ${fmt(el / progress - el)} left)` : '';
+        report(`${label}${proc.cpu ? ' on the processor' : ''}: ${Math.round(progress * 100)}%${eta}`, progress);
+      };
+      report(`${label}: 0%`, 0);
+      const l = song.buffer.getChannelData(0).slice(i0, i1), r = song.buffer.getChannelData(1).slice(i0, i1);
+      const { res } = await workerCall(proc.worker, { type: 'separate', L: l, R: r }, [l.buffer, r.buffer], onProgress);
+      // Some GPUs return NaNs instead of failing outright
+      if (!res.vocals.left.slice(0, 441000).every(Number.isFinite)) throw new Error('the graphics card returned invalid audio');
+      return res;
+    };
+    let proc = await getSeparator(report), res;
+    try { res = await run(proc); } catch (err) {
+      if (proc.cpu) throw err;
+      console.warn('GPU separation failed, retrying on the processor:', err);
+      res = await run(await getSeparator(report, true));
+    }
+    const inst = ['left', 'right'].map(side => {
+      const d = res.drums[side], b = res.bass[side], o = res.other[side], y = new Float32Array(d.length);
+      for (let i = 0; i < y.length; i++) y[i] = d[i] + b[i] + o[i];
+      return y;
+    });
+    return { vocals: [res.vocals.left, res.vocals.right], inst };
+  }
+  const toBuffer = chs => { const b = ctx.createBuffer(2, chs[0].length, SR); b.copyToChannel(chs[0], 0); b.copyToChannel(chs[1], 1); return b; };
+  function songReporter(song) {
+    const st = song.el.querySelector('.split-status'), bar = song.el.querySelector('.progress');
+    return (msg, frac) => {
+      st.className = 'status split-status'; st.textContent = msg;
+      bar.hidden = frac == null; if (frac != null) bar.firstElementChild.style.width = (frac * 100).toFixed(1) + '%';
+    };
+  }
+
   let splitQueue = Promise.resolve();
   function splitSong(song) {
     if (song.splitting || song.stems.vocals) return;
     song.splitting = true; updateSongCard(song);
-    const st = song.el.querySelector('.split-status'), bar = song.el.querySelector('.progress');
-    const report = (msg, frac) => {
-      st.className = 'status split-status'; st.textContent = msg;
-      bar.hidden = frac == null; if (frac != null) bar.firstElementChild.style.width = (frac * 100).toFixed(1) + '%';
-    };
+    const report = songReporter(song), st = song.el.querySelector('.split-status');
     report('Waiting for the other song to finish splitting…', null);
     splitQueue = splitQueue.then(async () => {
       try {
-        const L = song.buffer.getChannelData(0), R = song.buffer.getChannelData(1);
         const t0 = performance.now();
-        const run = async proc => {
-          const onProgress = progress => {
-            const el = (performance.now() - t0) / 1000;
-            const eta = progress > 0.05 ? ` (about ${fmt(el / progress - el)} left)` : '';
-            report(`Splitting vocals from the music${proc.cpu ? ' on the processor' : ''}: ${Math.round(progress * 100)}%${eta}`, progress);
-          };
-          report('Splitting vocals from the music: 0%', 0);
-          const l = L.slice(), r = R.slice();
-          const { res } = await workerCall(proc.worker, { type: 'separate', L: l, R: r }, [l.buffer, r.buffer], onProgress);
-          // Some GPUs return NaNs instead of failing outright
-          if (!res.vocals.left.slice(0, 441000).every(Number.isFinite)) throw new Error('the graphics card returned invalid audio');
-          return res;
-        };
-        let proc = await getSeparator(report), res;
-        try { res = await run(proc); } catch (err) {
-          if (proc.cpu) throw err;
-          console.warn('GPU separation failed, retrying on the processor:', err);
-          res = await run(await getSeparator(report, true));
-        }
-        const len = L.length;
-        const voc = ctx.createBuffer(2, len, SR), inst = ctx.createBuffer(2, len, SR);
-        voc.copyToChannel(res.vocals.left, 0); voc.copyToChannel(res.vocals.right, 1);
-        for (const [c, side] of [[0, 'left'], [1, 'right']]) {
-          const y = new Float32Array(len), d = res.drums[side], b = res.bass[side], o = res.other[side];
-          for (let i = 0; i < len; i++) y[i] = d[i] + b[i] + o[i];
-          inst.copyToChannel(y, c);
-        }
+        const r = await separateSamples(song, 0, song.buffer.length, report, 'Splitting vocals from the music');
+        const voc = toBuffer(r.vocals), inst = toBuffer(r.inst);
         song.stems = { vocals: voc, inst };
+        song.parts = [];
         song.peaks.vocals = peaksOf(voc, 0, voc.duration, 1000);
         song.peaks.inst = peaksOf(inst, 0, inst.duration, 1000);
         song.ver++;
@@ -920,6 +939,38 @@
       updateSongCard(song);
       if (song.stems.vocals) arrangementChanged();
     });
+  }
+
+  // Splitting a whole song takes minutes, so a vocal section is split on its own: just its
+  // stretch of the song plus a little context, rounded up to the model's chunk length.
+  const CHUNK_S = Math.floor(343980 * 0.75) / 44100;
+  function ensurePart(song, s0, s1) {
+    if (stemSource(song, 'vocals', s0, s1)) return Promise.resolve();
+    const busy = song.pending.find(p => p.s0 <= s0 + 1e-3 && p.s1 >= s1 - 1e-3);
+    if (busy) return busy.promise;
+    const dur = song.buffer.duration;
+    const len = Math.min(dur, Math.ceil((s1 - s0 + 0.6) / CHUNK_S) * CHUNK_S - 0.01);
+    const a = Math.max(0, Math.min(dur - len, (s0 + s1) / 2 - len / 2)), b = a + len;
+    const report = songReporter(song), st = song.el.querySelector('.split-status');
+    const job = { s0: a, s1: b };
+    report(`Waiting to split the vocals for ${fmt(s0)}–${fmt(s1)}…`, null);
+    job.promise = splitQueue = splitQueue.catch(() => {}).then(async () => {
+      const t0 = performance.now();
+      try {
+        const r = await separateSamples(song, Math.round(a * SR), Math.round(b * SR), report, `Splitting the vocals for ${fmt(s0)}–${fmt(s1)}`);
+        song.parts.push({ s0: a, s1: b, vocals: toBuffer(r.vocals), inst: toBuffer(r.inst) });
+        report(`Vocals for ${fmt(s0)}–${fmt(s1)} ready (took ${fmt((performance.now() - t0) / 1000)}).`, null);
+        st.classList.add('ok');
+      } catch (err) {
+        report('Could not split the vocals: ' + (err && err.message || err) + '. Check your internet connection for the one-time model download, then try again.', null);
+        st.classList.add('err');
+        throw err;
+      } finally {
+        song.pending = song.pending.filter(p => p !== job);
+      }
+    });
+    song.pending.push(job);
+    return job.promise;
   }
 
   // ================= Lyrics =================
@@ -1047,8 +1098,9 @@
   // asLine: a lyric line, which uses the vocals when the song has been split and goes on
   // Vocals 1 right after the previous line, on the same beat of the bar as in its song.
   function addClipFromSong(song, lane, asLine = false) {
-    const stem = asLine && song.stems.vocals ? 'vocals' : song.tab;
-    const buf = stemBuffer(song, stem);
+    // Vocal lanes get just the singing: the section is split on its own if the song isn't
+    const stem = lane > 0 && (asLine || song.tab === 'full') ? 'vocals' : song.tab;
+    const buf = song.buffer;
     if (P.bpm == null) setProjectBpm(song.bpm, false);
     // Start a whole-song clip on its first detected beat so it lines up with the grid
     const sel = song.sel || { start: song.firstBeat, end: buf.duration };
@@ -1074,10 +1126,11 @@
     }
     P.clips.push(clip);
     P.selected = clip;
+    if (!stemSource(song, stem, clip.srcStart, clip.srcEnd)) {
+      ensurePart(song, clip.srcStart, clip.srcEnd).then(drawTimeline, () => {});
+    }
     const st = $('#status');
-    if (lane > 0 && stem === 'full') {
-      st.textContent = 'Tip: this section has the full song. Press "Split vocals & music" on the song and pick the Vocals tab to add only the singing.';
-    } else if (lane === 0 && stem === 'vocals') {
+    if (lane === 0 && stem === 'vocals') {
       st.textContent = 'Tip: you added vocals to the Beat lane. Pick the Instrumental tab for just the music.';
     } else st.textContent = '';
     arrangementChanged();
@@ -1100,8 +1153,10 @@
   async function renderClip(c) {
     const key = renderKey(c);
     if (renderCache.has(key)) return renderCache.get(key);
-    const song = clipSong(c), buf = stemBuffer(song, c.stem);
-    const i0 = Math.max(0, Math.round(c.srcStart * SR)), i1 = Math.min(buf.length, Math.round(c.srcEnd * SR));
+    const song = clipSong(c);
+    if (!stemSource(song, c.stem, c.srcStart, c.srcEnd)) await ensurePart(song, c.srcStart, c.srcEnd);
+    const { buf, off } = stemSource(song, c.stem, c.srcStart, c.srcEnd);
+    const i0 = Math.max(0, Math.round((c.srcStart - off) * SR)), i1 = Math.min(buf.length, Math.round((c.srcEnd - off) * SR));
     let chs = [0, 1].map(ch => buf.getChannelData(ch).slice(i0, Math.max(i0 + 1, i1)));
     const speed = P.bpm / clipSrcBpm(c), pitch = Math.pow(2, c.semis / 12);
     const stretch = pitch / speed;
@@ -1121,13 +1176,13 @@
   }
   async function renderAll() {
     const need = P.clips.filter(c => !renderCache.has(renderKey(c)));
-    let i = 0;
+    let i = 0, failed = 0;
     for (const c of need) {
       setStatus(`Matching tempo and key: section ${++i} of ${need.length}…`);
       await yieldUI();
-      await renderClip(c);
+      try { await renderClip(c); } catch (err) { console.error(err); failed++; }
     }
-    if (need.length) setStatus('');
+    if (need.length) setStatus(failed ? `${failed} section(s) could not be prepared and will be silent. See the song card for why.` : '');
     const keep = new Set(P.clips.map(renderKey));
     for (const k of renderCache.keys()) if (!keep.has(k)) renderCache.delete(k);
   }
@@ -1305,9 +1360,10 @@
     // waveform
     const cv = el.querySelector('canvas'), w = Math.max(6, Math.round(len * z)), h = 54;
     cv.width = Math.min(4000, w); cv.height = h;
-    const buf = stemBuffer(song, c.stem);
-    const pk = peaksOf(buf, c.srcStart, c.srcEnd, cv.width);
-    const g = cv.getContext('2d'); g.fillStyle = song.color; g.globalAlpha = 0.55;
+    const src = stemSource(song, c.stem, c.srcStart, c.srcEnd);
+    const pk = src ? peaksOf(src.buf, c.srcStart - src.off, c.srcEnd - src.off, cv.width) : peaksOf(song.buffer, c.srcStart, c.srcEnd, cv.width);
+    if (!src) el.querySelector('.lbl').textContent += ' (splitting…)';
+    const g = cv.getContext('2d'); g.fillStyle = song.color; g.globalAlpha = src ? 0.55 : 0.2;
     for (let x = 0; x < cv.width; x++) { const v = Math.min(1, pk[x] * 1.6) * (h - 16) / 2; g.fillRect(x, 14 + (h - 14) / 2 - v, 1, Math.max(1, v * 2)); }
     attachClipDrag(el, c);
     return el;
@@ -1322,7 +1378,7 @@
       const o = { x: e.clientX, start: c.start, lane: c.lane, s0: c.srcStart, s1: c.srcEnd, moved: false };
       const lanesTop = $('#lanes').getBoundingClientRect().top;
       const srcSecPerBeat = 60 / clipSrcBpm(c);
-      const dur = stemBuffer(clipSong(c), c.stem).duration;
+      const dur = clipSong(c).buffer.duration;
       const move = ev => {
         const db = (ev.clientX - o.x) / P.zoom;
         if (Math.abs(ev.clientX - o.x) > 2) o.moved = true;
