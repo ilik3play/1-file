@@ -886,15 +886,27 @@
       report(`${label}: 0%`, 0);
       const l = song.buffer.getChannelData(0).slice(i0, i1), r = song.buffer.getChannelData(1).slice(i0, i1);
       const { res } = await workerCall(proc.worker, { type: 'separate', L: l, R: r }, [l.buffer, r.buffer], onProgress);
-      // Some GPUs return NaNs instead of failing outright
-      if (!res.vocals.left.slice(0, 441000).every(Number.isFinite)) throw new Error('the graphics card returned invalid audio');
+      // Graphics cards sometimes return a few invalid samples (NaN): silence those. Only if
+      // there are many is the result unusable.
+      let bad = 0, total = 0;
+      for (const k of ['vocals', 'drums', 'bass', 'other']) for (const ch of [res[k].left, res[k].right]) {
+        total += ch.length;
+        for (let i = 0; i < ch.length; i++) if (!Number.isFinite(ch[i])) { ch[i] = 0; bad++; }
+      }
+      if (bad > total * 0.001) throw new Error(`the graphics card returned invalid audio (${(100 * bad / total).toFixed(1)}% of it)`);
+      if (bad) console.warn(`Silenced ${bad} invalid samples`);
       return res;
     };
     let proc = await getSeparator(report), res;
     try { res = await run(proc); } catch (err) {
       if (proc.cpu) throw err;
       console.warn('GPU separation failed, retrying on the processor:', err);
-      res = await run(await getSeparator(report, true));
+      const why = String((err && err.message) || err);
+      const note = `The graphics card failed (${why}${/worker stopped/.test(why) ? ', possibly out of memory' : ''}), so this is starting again on the processor.`;
+      report(note, null);
+      await new Promise(r => setTimeout(r, 4000));
+      const cpu = await getSeparator(report, true);
+      res = await run(cpu);
     }
     const inst = ['left', 'right'].map(side => {
       const d = res.drums[side], b = res.bass[side], o = res.other[side], y = new Float32Array(d.length);
