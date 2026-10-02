@@ -269,17 +269,33 @@
   }
 
   // ================= Analysis: tempo & beat grid =================
-  const HOP = 256, WIN = 512;
-  function onsetEnvelope(data) {
-    const n = Math.max(0, Math.floor((data.length - WIN) / HOP) + 1);
-    const e = new Float32Array(n);
-    for (let f = 0; f < n; f++) {
-      let s = 0; const o = f * HOP;
-      for (let k = 0; k < WIN; k++) { const v = data[o + k]; s += v * v; }
-      e[f] = Math.log1p(1000 * Math.sqrt(s / WIN));
-    }
+  const HOP = 256;
+  // Spectral flux: new energy summed over frequency bands. This tracks drum hits much
+  // better than overall loudness, which sustained guitars and vocals smear out.
+  // Runs on a 2x-decimated signal, so frames are still HOP source samples apart.
+  const FLUX_N = 512;
+  async function onsetEnvelope(data) {
+    const half = Math.floor(data.length / 2), x = new Float32Array(half);
+    for (let i = 0; i < half; i++) x[i] = 0.5 * (data[2 * i] + data[2 * i + 1]);
+    const H = HOP / 2, n = Math.max(0, Math.floor((half - FLUX_N) / H) + 1), B = FLUX_N / 2;
+    const win = new Float32Array(FLUX_N);
+    for (let j = 0; j < FLUX_N; j++) win[j] = 0.5 - 0.5 * Math.cos(2 * Math.PI * j / FLUX_N);
+    const re = new Float32Array(FLUX_N), im = new Float32Array(FLUX_N);
+    let prev = new Float32Array(B), cur = new Float32Array(B);
     const d = new Float32Array(n);
-    for (let f = 1; f < n; f++) d[f] = Math.max(0, e[f] - e[f - 1]);
+    for (let f = 0; f < n; f++) {
+      const o = f * H;
+      for (let j = 0; j < FLUX_N; j++) { re[j] = x[o + j] * win[j]; im[j] = 0; }
+      fftInPlace(re, im);
+      let s = 0;
+      for (let k = 0; k < B; k++) {
+        cur[k] = Math.log1p(100 * Math.hypot(re[k], im[k]));
+        if (f > 0 && cur[k] > prev[k]) s += cur[k] - prev[k];
+      }
+      d[f] = s;
+      [prev, cur] = [cur, prev];
+      if (f % 4000 === 3999) await yieldUI();
+    }
     const R = 35, out = new Float32Array(n);
     let acc = 0, max = 1e-9;
     for (let f = 0; f < Math.min(n, R); f++) acc += d[f];
@@ -304,20 +320,10 @@
   }
 
   async function analyzeTempo(buffer, mono) {
-    const sr = buffer.sampleRate, len = buffer.length;
-    const off = new OfflineAudioContext(1, len, sr);
-    const mb = off.createBuffer(1, len, sr); mb.copyToChannel(mono, 0);
-    const src = off.createBufferSource(); src.buffer = mb;
-    const lp = off.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 160;
-    src.connect(lp).connect(off.destination); src.start();
-    const low = (await off.startRendering()).getChannelData(0);
-    const oFull = onsetEnvelope(mono), oLow = onsetEnvelope(low);
-    const n = Math.min(oFull.length, oLow.length);
+    const sr = buffer.sampleRate;
+    const env = await onsetEnvelope(mono), n = env.length;
     const os = new Float32Array(n);
-    for (let f = 1; f < n - 1; f++) {
-      const a = 0.6 * oLow[f - 1] + 0.4 * oFull[f - 1], b = 0.6 * oLow[f] + 0.4 * oFull[f], c = 0.6 * oLow[f + 1] + 0.4 * oFull[f + 1];
-      os[f] = 0.25 * a + 0.5 * b + 0.25 * c;
-    }
+    for (let f = 1; f < n - 1; f++) os[f] = 0.25 * env[f - 1] + 0.5 * env[f] + 0.25 * env[f + 1];
     const fps = sr / HOP;
     const Lmin = Math.floor(fps * 60 / 200), Lmax = Math.ceil(fps * 60 / 60);
     const N = Math.min(n, Math.floor(fps * 240));
@@ -358,7 +364,7 @@
     let bpm = 60 * fps / bestP;
     if (Math.abs(bpm - Math.round(bpm)) < 0.04) bpm = Math.round(bpm);
     const period = 60 / bpm;
-    let firstBeat = (fit.phi * HOP + 0.57 * WIN) / sr;
+    let firstBeat = (fit.phi * HOP + FLUX_N) / sr; // FLUX_N decimated samples = half a frame
     firstBeat = ((firstBeat % period) + period) % period;
     return { bpm: +bpm.toFixed(2), firstBeat };
   }
@@ -855,7 +861,8 @@
     const stem = song.tab;
     const buf = stemBuffer(song, stem);
     if (P.bpm == null) setProjectBpm(song.bpm, false);
-    const sel = song.sel || { start: 0, end: buf.duration };
+    // Start a whole-song clip on its first detected beat so it lines up with the grid
+    const sel = song.sel || { start: song.firstBeat, end: buf.duration };
     const clip = {
       id: nextClipId++, songId: song.id, stem, lane, srcStart: sel.start, srcEnd: sel.end,
       bpmMul: nearestMul(song.bpm, P.bpm), semis: 0, gain: 1, start: 0
