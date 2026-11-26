@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Don't Say the Same Thing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* Layout: one game card, centered column; a "mind" panel shows the computer's three sealed answers */
+:root {
+  --bg: #eef0f7;
+  --card: #ffffff;
+  --ink: #1b1d33;
+  --muted: #5d6185;
+  --line: #d6d9ea;
+  --accent: #ff5a36;      /* the "same thing" alarm */
+  --cool: #3346d3;        /* computer / sealed answers */
+  --good: #12845a;
+  --seal: #e4e7f6;
+  --display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --body: "Inter", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12131f; --card: #1c1e30; --ink: #eceefa; --muted: #a2a6c6; --line: #2f3250;
+    --accent: #ff7655; --cool: #8c9bff; --good: #45c993; --seal: #262942; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12131f; --card: #1c1e30; --ink: #eceefa; --muted: #a2a6c6; --line: #2f3250;
+  --accent: #ff7655; --cool: #8c9bff; --good: #45c993; --seal: #262942; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 40px;
+}
+.wrap { max-width: 640px; margin: 0 auto; display: grid; gap: 20px; }
+header { display: flex; justify-content: space-between; align-items: end; gap: 12px; flex-wrap: wrap; }
+h1 { font-family: var(--display); font-weight: 800; font-size: clamp(1.9rem, 6vw, 2.7rem); line-height: 1; margin: 0; letter-spacing: -0.02em; text-wrap: balance; }
+h1 em { font-style: normal; color: var(--accent); }
+.stats { display: flex; gap: 18px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.stat { display: grid; }
+.stat small { font-family: var(--body); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.stat b { font-size: 1.3rem; font-weight: 600; }
+.lives { color: var(--accent); letter-spacing: 2px; }
+
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px; display: grid; gap: 18px; }
+.eyebrow { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); display: flex; justify-content: space-between; }
+.category { font-family: var(--display); font-weight: 800; font-size: clamp(1.6rem, 5.5vw, 2.2rem); line-height: 1.1; margin: 4px 0 0; text-wrap: balance; }
+
+.mind { display: grid; gap: 8px; }
+.mind-label { font-size: 0.8rem; color: var(--muted); }
+.slots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.slot {
+  min-height: 52px; border-radius: 10px; background: var(--seal); color: var(--cool);
+  display: grid; place-items: center; text-align: center; padding: 6px; font-weight: 600; font-size: 0.95rem;
+  border: 1px dashed color-mix(in srgb, var(--cool) 40%, transparent); min-width: 0; overflow-wrap: anywhere;
+}
+.slot.sealed { font-family: var(--mono); letter-spacing: 0.2em; }
+.slot.hit { background: var(--accent); color: #fff; border-color: var(--accent); }
+.slot.open { border-style: solid; }
+
+.timer { height: 6px; background: var(--seal); border-radius: 99px; overflow: hidden; }
+.timer i { display: block; height: 100%; width: 100%; background: var(--cool); transform-origin: left; }
+.timer.low i { background: var(--accent); }
+
+form { display: flex; gap: 8px; }
+input[type=text] {
+  flex: 1; min-width: 0; font: inherit; font-size: 1.1rem; padding: 12px 14px; border-radius: 10px;
+  border: 2px solid var(--line); background: var(--bg); color: var(--ink);
+}
+input[type=text]:focus { outline: none; border-color: var(--cool); }
+button {
+  font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 12px 18px; cursor: pointer;
+  background: var(--ink); color: var(--card);
+}
+button:focus-visible, input:focus-visible { outline: 3px solid var(--cool); outline-offset: 2px; }
+button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+button:disabled { opacity: 0.4; cursor: default; }
+
+.msg { min-height: 1.5em; font-weight: 500; }
+.msg.bad { color: var(--accent); }
+.msg.good { color: var(--good); }
+.msg.info { color: var(--muted); }
+.said { display: flex; flex-wrap: wrap; gap: 6px; }
+.said span { font-size: 0.85rem; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+.said span.mine { color: var(--good); border-color: var(--good); }
+.said span.clash { color: var(--accent); border-color: var(--accent); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.rules { color: var(--muted); font-size: 0.92rem; max-width: 62ch; }
+.rules ol { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 4px; }
+.over { text-align: center; display: grid; gap: 10px; justify-items: center; }
+.big { font-family: var(--display); font-weight: 800; font-size: 3rem; line-height: 1; font-variant-numeric: tabular-nums; }
+.shake { animation: shake .35s; }
+@keyframes shake { 25%{transform:translateX(-6px)} 50%{transform:translateX(6px)} 75%{transform:translateX(-3px)} }
+@media (prefers-reduced-motion: reduce) { .shake { animation: none; } .timer i { transition: none !important; } }
+@media (max-width: 420px) { .slot { font-size: 0.82rem; } form { flex-direction: column; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <h1>Don't Say the <em>Same</em> Thing</h1>
+    <div class="stats">
+      <div class="stat"><small>Score</small><b id="score">0</b></div>
+      <div class="stat"><small>Round</small><b id="round">1/10</b></div>
+      <div class="stat"><small>Lives</small><b class="lives" id="lives">●●●</b></div>
+    </div>
+  </header>
+
+  <section class="card" id="play">
+    <div>
+      <div class="eyebrow"><span>Name something in this category</span><span id="clock">15s</span></div>
+      <h2 class="category" id="category">Fruits</h2>
+    </div>
+    <div class="timer" id="timer"><i id="bar"></i></div>
+    <div class="mind">
+      <div class="mind-label">The computer has locked in 3 answers. Say anything except those.</div>
+      <div class="slots" id="slots"></div>
+    </div>
+    <form id="form" autocomplete="off">
+      <input type="text" id="answer" placeholder="Type your answer…" aria-label="Your answer" autocapitalize="off" spellcheck="false">
+      <button type="submit" id="go">Say it</button>
+    </form>
+    <div class="msg info" id="msg">Example round: try a fruit the computer won't pick.</div>
+    <div class="said" id="said"></div>
+    <div class="actions"><button class="ghost" id="next" hidden>Next round →</button></div>
+  </section>
+
+  <section class="card over" id="over" hidden>
+    <div class="eyebrow" style="justify-content:center">Final score</div>
+    <div class="big" id="final">0</div>
+    <div id="verdict" class="rules"></div>
+    <button id="again">Play again</button>
+  </section>
+
+  <section class="rules">
+    <strong>How to play</strong>
+    <ol>
+      <li>Each round shows a category. The computer secretly picks 3 answers, usually the obvious ones.</li>
+      <li>Type a real answer the computer didn't pick. Obvious answers score 100; rarer ones score up to 200, plus a time bonus.</li>
+      <li>If you say the same thing as the computer, or the clock runs out, you lose a life. Answers it doesn't recognize don't count against you, so just try another.</li>
+      <li>10 rounds, 3 lives.</li>
+    </ol>
+  </section>
+</div>
+
+<script>
+// Answers are listed roughly most-common first; the computer favors the front of each list.
+const CATS = {
+  "Fruits": "apple,banana,orange,strawberry,grape,watermelon,pineapple,mango,peach,pear,cherry,blueberry,kiwi,lemon,raspberry,lime,plum,pomegranate,coconut,cantaloupe,grapefruit,apricot,papaya,blackberry,fig,nectarine,honeydew,tangerine,clementine,cranberry,guava,lychee,passion fruit,dragon fruit,persimmon,date,kumquat,starfruit,jackfruit,durian,quince,gooseberry,mulberry,elderberry,boysenberry,plantain,avocado,tomato",
+  "Colors": "red,blue,green,yellow,purple,orange,pink,black,white,brown,gray|grey,teal,turquoise,maroon,navy,gold,silver,beige,violet,indigo,magenta,cyan,lavender,crimson,olive,tan,coral,peach,mint,burgundy,lime,aqua,ivory,charcoal,mauve,salmon,khaki,chartreuse,periwinkle,scarlet,emerald,amber,ochre,sienna,fuchsia,cream,lilac,cobalt,taupe",
+  "Animals at a zoo": "lion,elephant,giraffe,tiger,monkey,zebra,bear,penguin,gorilla,hippo|hippopotamus,kangaroo,panda,rhino|rhinoceros,flamingo,cheetah,chimpanzee,koala,crocodile,alligator,leopard,orangutan,polar bear,sea lion,camel,ostrich,lemur,meerkat,otter,wolf,jaguar,snake,tortoise,peacock,sloth,red panda,hyena,warthog,okapi,tapir,komodo dragon,bison,llama,anteater,baboon,gazelle,seal,parrot,emu,capybara,armadillo",
+  "Pizza toppings": "pepperoni,cheese,mushroom,sausage,onion,pepper|bell pepper|green pepper,olive,ham,pineapple,bacon,chicken,spinach,tomato,jalapeno|jalapeño,anchovy,basil,garlic,beef,meatball,salami,artichoke,feta,ricotta,arugula,prosciutto,egg,corn,shrimp,broccoli,eggplant,zucchini,red onion,goat cheese,banana pepper,sun dried tomato,bbq chicken,buffalo chicken,mozzarella,parmesan,hot honey,pesto,truffle",
+  "Sports": "soccer|football,basketball,baseball,tennis,golf,hockey,american football,volleyball,swimming,boxing,cricket,rugby,track,wrestling,gymnastics,skiing,cycling,softball,lacrosse,badminton,table tennis|ping pong,surfing,skateboarding,snowboarding,bowling,fencing,rowing,archery,karate,judo,water polo,handball,curling,polo,squash,racquetball,pickleball,diving,triathlon,marathon,climbing,sailing,motocross,mma,taekwondo,figure skating,bobsled,darts,billiards",
+  "Things in a kitchen": "fridge|refrigerator,stove,oven,microwave,sink,toaster,knife,fork,spoon,plate,cup,pan,pot,dishwasher,blender,kettle,cutting board,spatula,bowl,mug,coffee maker,napkin,whisk,ladle,colander,cabinet,counter,trash can,sponge,dish soap,towel,oven mitt,can opener,peeler,grater,tongs,rolling pin,measuring cup,timer,apron,salt,pepper,freezer,air fryer,mixer,food processor,toaster oven,pantry,spice rack",
+  "Car brands": "toyota,ford,honda,chevrolet|chevy,bmw,tesla,mercedes|mercedes-benz,nissan,audi,jeep,hyundai,kia,volkswagen|vw,subaru,lexus,dodge,mazda,porsche,ferrari,lamborghini,cadillac,gmc,ram,buick,volvo,acura,infiniti,chrysler,lincoln,jaguar,land rover,mini,fiat,mitsubishi,genesis,maserati,bentley,rolls-royce|rolls royce,aston martin,bugatti,mclaren,alfa romeo,rivian,lucid,polestar,lotus,pontiac,saturn,hummer",
+  "US states": "california,texas,florida,new york,hawaii,alaska,washington,ohio,georgia,arizona,colorado,nevada,illinois,michigan,pennsylvania,virginia,north carolina,new jersey,massachusetts,oregon,tennessee,louisiana,utah,maine,kentucky,alabama,minnesota,wisconsin,missouri,indiana,maryland,south carolina,oklahoma,iowa,kansas,arkansas,mississippi,connecticut,montana,idaho,nebraska,new mexico,west virginia,wyoming,vermont,new hampshire,rhode island,delaware,south dakota,north dakota",
+  "Breakfast foods": "eggs|egg,pancakes|pancake,bacon,cereal,toast,waffles|waffle,oatmeal,sausage,bagel,yogurt,french toast,hash browns|hash brown,omelet|omelette,muffin,croissant,fruit,granola,smoothie,donut|doughnut,biscuits|biscuit,grits,breakfast burrito,avocado toast,coffee,orange juice,cinnamon roll,scone,english muffin,crepe|crepes,quiche,eggs benedict,porridge,danish,pop tart,breakfast sandwich,chilaquiles,shakshuka,frittata,congee,huevos rancheros,corned beef hash,chia pudding",
+  "Instruments": "piano,guitar,drums,violin,flute,trumpet,saxophone,cello,clarinet,bass,harp,ukulele,trombone,keyboard,harmonica,banjo,tuba,viola,french horn,oboe,xylophone,accordion,tambourine,bagpipes,mandolin,triangle,bassoon,organ,cymbals,piccolo,synthesizer,sitar,marimba,timpani,recorder,cowbell,glockenspiel,bongos,didgeridoo,kazoo,steel drum,lute,theremin,djembe",
+  "Things at the beach": "sand,water,ocean,waves,sun,towel,umbrella,sunscreen,shells|seashell|shell,sandcastle,surfboard,bucket,shovel,seagull,crab,lifeguard,sunglasses,swimsuit,cooler,boardwalk,beach ball,chair,pier,kite,dolphin,jellyfish,seaweed,volleyball,flip flops,tide,dunes,hat,frisbee,boat,starfish,lighthouse,palm tree,snorkel,ice cream,rocks,driftwood,boogie board,sand dollar,tan",
+  "Jobs": "doctor,teacher,nurse,lawyer,firefighter,police officer,engineer,chef,accountant,pilot,dentist,farmer,artist,scientist,programmer,mechanic,electrician,plumber,cashier,waiter,pharmacist,veterinarian,architect,banker,carpenter,actor,musician,writer,journalist,photographer,judge,soldier,barber,librarian,therapist,designer,surgeon,janitor,cpa,astronaut,baker,butcher,coach,economist,translator,tailor,zookeeper,lifeguard,realtor",
+  "Board games": "monopoly,chess,scrabble,clue,checkers,candy land,risk,sorry,the game of life|life,trouble,battleship,connect four,operation,uno,catan|settlers of catan,yahtzee,jenga,pictionary,trivial pursuit,guess who,mouse trap,backgammon,stratego,chutes and ladders,ticket to ride,boggle,mastermind,othello,taboo,codenames,pandemic,go,parcheesi,cranium,apples to apples,carcassonne,azul,mahjong,dominoes,twister,hungry hungry hippos,scattergories,splendor,wingspan",
+  "Vegetables": "carrot,broccoli,potato,lettuce,tomato,onion,corn,cucumber,spinach,pepper,celery,peas,green beans,cauliflower,cabbage,zucchini,mushroom,garlic,sweet potato,kale,asparagus,eggplant,beet,radish,brussels sprouts,squash,pumpkin,artichoke,leek,okra,turnip,bok choy,arugula,parsnip,shallot,yam,collard greens,chard,fennel,rutabaga,kohlrabi,jicama,watercress,endive,edamame",
+  "Things that are cold": "ice,snow,ice cream,freezer,fridge|refrigerator,winter,antarctica,popsicle,ice cube,glacier,arctic,iceberg,snowman,polar bear,penguin,frost,hail,north pole,slushie,cold drink,ice pack,water,wind,blizzard,igloo,icicle,mountain,dry ice,liquid nitrogen,ocean,ice rink,frozen yogurt,gelato,space,pluto,metal,cold brew,lemonade,smoothie,ice skates,iced coffee",
+  "Things with wheels": "car,bike|bicycle,bus,truck,motorcycle,skateboard,train,wagon,stroller,wheelchair,scooter,tricycle,shopping cart,roller skates,suitcase,van,tractor,airplane|plane,office chair,golf cart,wheelbarrow,rollerblades,dolly,forklift,ambulance,fire truck,tank,go kart,cart,trailer,carriage,unicycle,segway,bulldozer,rv,limo|limousine,taxi,hoverboard,pram,lawn mower,tram,trolley,rickshaw,monster truck",
+  "Superheroes": "superman,batman,spider-man|spiderman,iron man,wonder woman,captain america,hulk,thor,black panther,flash,aquaman,wolverine,black widow,green lantern,deadpool,doctor strange,ant-man|ant man,captain marvel,hawkeye,cyclops,storm,robin,daredevil,green arrow,cyborg,vision,scarlet witch,shazam,silver surfer,nightwing,falcon,star-lord|star lord,groot,rocket,gamora,blue beetle,supergirl,batgirl,moon knight,ms marvel,she-hulk,invisible woman,human torch,mister fantastic,thing,static,punisher,luke cage,jessica jones",
+  "Countries": "usa|united states|america,china,canada,mexico,france,japan,brazil,italy,germany,india,russia,australia,spain,england|uk|united kingdom,egypt,south korea|korea,argentina,ireland,greece,south africa,nigeria,kenya,peru,sweden,norway,turkey,vietnam,thailand,portugal,switzerland,netherlands,poland,colombia,chile,new zealand,morocco,iceland,ethiopia,indonesia,philippines,pakistan,saudi arabia,cuba,jamaica,ghana,finland,denmark,austria,belgium,nepal,mongolia,peru,uruguay,croatia,fiji,madagascar,bhutan,laos,estonia,latvia,lithuania,qatar,oman,senegal,bolivia,ecuador",
+  "Things you wear": "shirt,pants,shoes,socks,hat,jacket,dress,skirt,shorts,sweater,coat,jeans,gloves,scarf,belt,tie,hoodie,boots,sneakers,underwear,watch,glasses,necklace,earrings,ring,bracelet,sandals,pajamas,swimsuit,vest,suit,blouse,leggings,beanie,cap,mittens,heels,slippers,tank top,overalls,cardigan,blazer,romper,kimono,poncho,apron,bandana,crown,backpack",
+  "Desserts": "cake,ice cream,cookie,brownie,pie,cupcake,cheesecake,donut|doughnut,pudding,chocolate,tiramisu,apple pie,macaron,cannoli,creme brulee,mousse,cobbler,churro,sundae,flan,gelato,fudge,eclair,baklava,cinnamon roll,banana split,popsicle,sorbet,trifle,parfait,mochi,pavlova,crepe,tres leches,key lime pie,panna cotta,strudel,rice pudding,bread pudding,carrot cake,red velvet cake,s'mores|smores,lava cake,gulab jamun,shortcake,meringue,profiterole,funnel cake,custard"
+};
+
+const ROUNDS = 10, LIVES = 3, PICKS = 3, SECONDS = 15;
+const $ = id => document.getElementById(id);
+
+// Each entry: { name, alts:[normalized forms], rank }
+const DATA = {};
+for (const [cat, list] of Object.entries(CATS)) {
+  const seen = new Set();
+  DATA[cat] = list.split(",").map(s => s.trim()).filter(s => {
+    if (seen.has(s)) return false; seen.add(s); return true;
+  }).map((entry, rank) => {
+    const forms = entry.split("|");
+    return { name: forms[0], alts: forms.map(norm), rank };
+  });
+}
+
+function norm(s) {
+  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9 ]/g, " ").replace(/^(the|a|an) /, "").replace(/\s+/g, " ").trim();
+}
+function stems(s) {
+  const n = norm(s), out = [n];
+  if (n.endsWith("ies")) out.push(n.slice(0, -3) + "y");
+  if (n.endsWith("es")) out.push(n.slice(0, -2));
+  if (n.endsWith("s")) out.push(n.slice(0, -1));
+  out.push(n + "s", n + "es");
+  return out;
+}
+function lookup(cat, text) {
+  const forms = stems(text);
+  return DATA[cat].find(item => item.alts.some(a => forms.includes(a) || stems(a).includes(forms[0]))) || null;
+}
+
+// Weighted pick that favors common answers: weight falls off with rank.
+function computerPicks(cat) {
+  const pool = DATA[cat].slice(), picks = [];
+  while (picks.length < PICKS) {
+    const weights = pool.map(it => 1 / Math.pow(it.rank + 1.5, 1.15));
+    let r = Math.random() * weights.reduce((a, b) => a + b, 0);
+    let i = 0; while ((r -= weights[i]) > 0) i++;
+    picks.push(pool.splice(i, 1)[0]);
+  }
+  return picks;
+}
+
+let S;
+function freshState() {
+  const cats = Object.keys(CATS).sort(() => Math.random() - 0.5).slice(0, ROUNDS);
+  return { cats, round: 0, score: 0, lives: LIVES, picks: [], tries: [], done: false, timeLeft: SECONDS, over: false };
+}
+
+let tick = null;
+function startRound() {
+  S.picks = computerPicks(S.cats[S.round]).map(p => p.name);
+  S.tries = []; S.done = false; S.timeLeft = SECONDS;
+  render(); setMsg("", "info");
+  $("answer").disabled = false; $("go").disabled = false; $("next").hidden = true;
+  $("answer").value = ""; $("answer").focus({ preventScroll: true });
+  runClock();
+}
+function runClock() {
+  clearInterval(tick);
+  const end = Date.now() + S.timeLeft * 1000;
+  tick = setInterval(() => {
+    S.timeLeft = Math.max(0, (end - Date.now()) / 1000);
+    drawClock();
+    if (S.timeLeft <= 0) { clearInterval(tick); endRound("time"); }
+  }, 100);
+}
+function drawClock() {
+  $("clock").textContent = Math.ceil(S.timeLeft) + "s";
+  $("bar").style.transform = `scaleX(${S.timeLeft / SECONDS})`;
+  $("timer").classList.toggle("low", S.timeLeft < 5);
+}
+
+function submit(text) {
+  if (S.done || S.over) return;
+  const cat = S.cats[S.round];
+  if (!norm(text)) return;
+  const item = lookup(cat, text);
+  if (!item) { setMsg(`"${text}" isn't on the list for ${cat}. Try another.`, "info"); return; }
+  if (S.tries.includes(item.name)) { setMsg(`You already tried ${item.name}.`, "info"); return; }
+  S.tries.push(item.name);
+  if (S.picks.includes(item.name)) { endRound("clash", item); return; }
+  const len = DATA[cat].length;
+  const rarity = Math.round(100 * item.rank / (len - 1));
+  const timeBonus = Math.round(S.timeLeft * 2);
+  const pts = 100 + rarity + timeBonus;
+  S.score += pts;
+  endRound("win", item, pts, rarity);
+}
+
+function endRound(kind, item, pts, rarity) {
+  clearInterval(tick);
+  S.done = true;
+  if (kind === "clash") { S.lives--; setMsg(`Same thing! The computer said ${item.name} too.`, "bad"); shake(); }
+  else if (kind === "time") { S.lives--; setMsg("Time's up. That costs a life.", "bad"); shake(); }
+  else setMsg(`+${pts}. The computer didn't think of ${item.name}${rarity > 60 ? " (nice deep cut)" : ""}.`, "good");
+  render(item);
+  $("answer").disabled = true; $("go").disabled = true;
+  const last = S.lives <= 0 || S.round >= ROUNDS - 1;
+  $("next").textContent = last ? "See final score →" : "Next round →";
+  $("next").hidden = false; $("next").focus({ preventScroll: true });
+}
+
+function next() {
+  if (S.lives <= 0 || S.round >= ROUNDS - 1) return finish();
+  S.round++; startRound();
+}
+function finish() {
+  S.over = true;
+  $("play").hidden = true; $("over").hidden = false;
+  $("final").textContent = S.score;
+  const v = S.lives <= 0
+    ? `Out of lives after ${S.round + 1} rounds. The computer read your mind too often.`
+    : S.score >= 1500 ? "Mind unreadable. You out-thought the computer."
+    : S.score >= 1200 ? "Solid. You dodged the obvious answers."
+    : "You made it through. Next time, go stranger.";
+  $("verdict").textContent = v;
+  render(); $("again").focus({ preventScroll: true });
+}
+
+function render(clashItem) {
+  $("score").textContent = S.score;
+  $("round").textContent = `${Math.min(S.round + 1, ROUNDS)}/${ROUNDS}`;
+  $("lives").textContent = "●".repeat(Math.max(0, S.lives)) + "○".repeat(LIVES - Math.max(0, S.lives));
+  $("category").textContent = S.cats[S.round];
+  $("slots").innerHTML = S.picks.map(p => {
+    if (!S.done) return `<div class="slot sealed" aria-label="Hidden answer">? ? ?</div>`;
+    const hit = clashItem && clashItem.name === p;
+    return `<div class="slot open${hit ? " hit" : ""}">${esc(p)}</div>`;
+  }).join("");
+  $("said").innerHTML = S.tries.map(t =>
+    `<span class="${S.picks.includes(t) ? "clash" : (S.done ? "mine" : "")}">${esc(t)}</span>`).join("");
+  drawClock();
+}
+function setMsg(t, kind) { const m = $("msg"); m.textContent = t; m.className = "msg " + kind; }
+function shake() { const c = $("play"); c.classList.remove("shake"); void c.offsetWidth; c.classList.add("shake"); }
+function esc(s) { return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+$("form").addEventListener("submit", e => { e.preventDefault(); const v = $("answer").value; $("answer").value = ""; submit(v); });
+$("next").addEventListener("click", next);
+$("again").addEventListener("click", () => { S = freshState(); $("over").hidden = true; $("play").hidden = false; startRound(); });
+
+function start(saved) {
+  if (saved && saved.cats) {
+    S = saved;
+    if (S.over) { $("play").hidden = true; finish(); return; }
+    render(); $("next").hidden = !S.done;
+    $("answer").disabled = S.done; $("go").disabled = S.done;
+    if (!S.done) runClock();
+  } else {
+    S = freshState();
+    S.cats = ["Fruits", ...S.cats.filter(c => c !== "Fruits")].slice(0, ROUNDS);
+    startRound();
+  }
+}
+window.claude?.hot?.snapshot?.(() => S);
+window.claude?.hot?.ready ? window.claude.hot.ready(start) : start(window.claude?.hot?.data ?? {});
+</script>
+
+</body>
+</html>

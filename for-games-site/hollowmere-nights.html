@@ -1,0 +1,740 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hollowmere Nights</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IM+Fell+English+SC&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: one narrow column passed hand to hand; a brass clock dial marks each turn of the night */
+:root {
+  --bg: #0d1020;
+  --panel: #151a2f;
+  --line: #2b3256;
+  --ink: #ebe6d8;
+  --muted: #9ba1bf;
+  --brass: #d4ab5f;
+  --good: #8db9ff;
+  --evil: #ef7a6e;
+  --display: "IM Fell English SC", "Palatino Linotype", Georgia, serif;
+  --body: "Inter", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+body.day { --bg: #181d35; --panel: #20264a; --line: #343c68; }
+* { box-sizing: border-box; }
+body {
+  background: radial-gradient(ellipse 80% 40% at 50% 0%, color-mix(in srgb, var(--brass) 10%, transparent), transparent 70%), var(--bg);
+  background-color: var(--bg);
+  color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 48px;
+  min-height: 100vh;
+}
+#app { max-width: 560px; margin: 0 auto; display: grid; gap: 20px; }
+h1, h2, h3 { font-family: var(--display); font-weight: 400; margin: 0; text-wrap: balance; line-height: 1.1; }
+h1 { font-size: clamp(2.4rem, 11vw, 3.6rem); color: var(--brass); }
+h2 { font-size: clamp(1.7rem, 7vw, 2.3rem); }
+h3 { font-size: 1.6rem; }
+p { margin: 0; }
+.eyebrow { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+.muted { color: var(--muted); }
+.small { font-size: 0.88rem; }
+.stack { display: grid; gap: 12px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: grid; gap: 14px; min-width: 0; }
+.center { text-align: center; justify-items: center; }
+
+.btn {
+  font: inherit; font-weight: 600; border-radius: 10px; padding: 12px 18px; cursor: pointer;
+  background: var(--brass); color: #1a1408; border: 1px solid var(--brass);
+}
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+.btn.evil { background: var(--evil); border-color: var(--evil); color: #1d0c0a; }
+.btn.big { padding: 16px 28px; font-size: 1.1rem; }
+.btn.wide { width: 100%; }
+.btn:disabled { opacity: 0.35; cursor: default; }
+.btn:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--good); outline-offset: 2px; }
+
+/* setup */
+.names { display: grid; gap: 8px; }
+.name-row { display: grid; grid-template-columns: 2.2rem 1fr auto; gap: 8px; align-items: center; }
+.seat { font-family: var(--mono); color: var(--muted); font-size: 0.85rem; text-align: right; }
+input[type=text] {
+  font: inherit; width: 100%; min-width: 0; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+}
+.x { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 8px; width: 40px; height: 40px; cursor: pointer; font-size: 1.1rem; }
+.dist { font-family: var(--mono); font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.err { color: var(--evil); font-weight: 500; }
+ol.how { margin: 0; padding-left: 1.3em; display: grid; gap: 6px; color: var(--muted); }
+ol.how b { color: var(--ink); font-weight: 600; }
+
+/* roles */
+details summary { cursor: pointer; font-weight: 600; }
+.roles { display: grid; gap: 16px; margin-top: 12px; }
+.roles h4 { margin: 0 0 6px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; }
+.roles h4.good { color: var(--good); } .roles h4.evil { color: var(--evil); }
+.roles dl { margin: 0; display: grid; gap: 8px; }
+.roles dt { font-family: var(--display); font-size: 1.15rem; }
+.roles dd { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+/* turns */
+.handoff { display: grid; gap: 14px; justify-items: center; text-align: center; padding-top: 12px; }
+.dial {
+  --p: 0; width: min(52vw, 200px); max-width: 100%; aspect-ratio: 1; border-radius: 50%;
+  position: relative; display: grid; place-items: center;
+  background: conic-gradient(var(--brass) calc(var(--p) * 360deg), var(--line) 0);
+}
+.dial::before { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: var(--bg); }
+.dial::after {
+  content: ""; position: absolute; inset: 12px; border-radius: 50%; opacity: 0.8;
+  background: repeating-conic-gradient(var(--muted) 0 1.3deg, transparent 1.3deg 30deg);
+  -webkit-mask: radial-gradient(circle, transparent 80%, #000 81%); mask: radial-gradient(circle, transparent 80%, #000 81%);
+}
+.dial span { position: relative; z-index: 1; font-family: var(--display); font-size: clamp(2.2rem, 10vw, 3rem); color: var(--brass); }
+.who { font-size: clamp(2.2rem, 10vw, 3.2rem); overflow-wrap: anywhere; }
+
+.role { border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 6px; background: var(--bg); }
+.role.good { border-color: color-mix(in srgb, var(--good) 55%, var(--line)); }
+.role.evil { border-color: color-mix(in srgb, var(--evil) 65%, var(--line)); }
+.role .team { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; }
+.role.good .team { color: var(--good); } .role.evil .team { color: var(--evil); }
+.role h3 { font-size: 2rem; }
+.role p { color: var(--muted); }
+.callout { border-left: 3px solid var(--brass); padding: 8px 12px; background: color-mix(in srgb, var(--brass) 8%, transparent); border-radius: 0 8px 8px 0; font-weight: 500; overflow-wrap: anywhere; }
+.callout.evil { border-left-color: var(--evil); background: color-mix(in srgb, var(--evil) 10%, transparent); }
+.grim { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.grim td { padding: 5px 4px; border-bottom: 1px solid var(--line); }
+.grim td:first-child { color: var(--muted); font-family: var(--mono); width: 2rem; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.pbtn {
+  font: inherit; text-align: left; padding: 10px 12px; border-radius: 9px; cursor: pointer;
+  background: var(--bg); color: var(--ink); border: 1px solid var(--line); min-width: 0; overflow-wrap: anywhere;
+}
+.pbtn small { display: block; font-family: var(--mono); color: var(--muted); font-size: 0.72rem; }
+.pbtn.sel { border-color: var(--brass); background: color-mix(in srgb, var(--brass) 18%, var(--bg)); }
+.pbtn:disabled { opacity: 0.35; cursor: default; }
+.pbtn.dead { text-decoration: line-through; color: var(--muted); }
+
+/* day */
+.dayhead { display: flex; justify-content: space-between; align-items: end; gap: 12px; flex-wrap: wrap; }
+.stats { display: flex; gap: 18px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.stats div { display: grid; }
+.stats small { font-family: var(--body); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
+.stats b { font-size: 1.25rem; font-weight: 500; }
+.block { font-size: 1.05rem; }
+.block b { font-family: var(--display); font-size: 1.4rem; font-weight: 400; color: var(--evil); }
+.town { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.citizen { display: grid; grid-template-columns: 1.8rem 1fr; gap: 4px 8px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--line); min-width: 0; }
+.citizen .n { font-family: var(--mono); color: var(--muted); font-size: 0.8rem; padding-top: 2px; }
+.citizen .nm { overflow-wrap: anywhere; font-weight: 500; }
+.citizen .tags { grid-column: 2; display: flex; gap: 4px; flex-wrap: wrap; }
+.citizen.dead .nm { color: var(--muted); text-decoration: line-through; }
+.tag { font-size: 0.68rem; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+.tag.ghost { border-color: var(--good); color: var(--good); }
+.tag.hot { border-color: var(--evil); color: var(--evil); }
+.events { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; color: var(--muted); font-size: 0.92rem; }
+.tally { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.over-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.over-table td { padding: 7px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.over-table .good { color: var(--good); } .over-table .evil { color: var(--evil); }
+.scroll { overflow-x: auto; }
+@media (prefers-reduced-motion: no-preference) {
+  .fade { animation: fade .35s ease-out; }
+  @keyframes fade { from { opacity: .6; transform: translateY(4px); } }
+}
+</style>
+</head>
+<body>
+
+<main id="app"></main>
+
+<script>
+const ROLES = {
+  archivist:  { name: "Archivist", team: "villager", text: "On your first night, you learn that one of two players is a particular Villager." },
+  sentry:     { name: "Sentry", team: "villager", text: "On your first night, you learn that one of two players is a particular Henchman." },
+  tally:      { name: "Tally Clerk", team: "villager", text: "On your first night, you learn how many pairs of evil players are sitting next to each other." },
+  bellringer: { name: "Bellringer", team: "villager", text: "Each night, you learn how many of your two living neighbours are evil." },
+  seer:       { name: "Seer", team: "villager", text: "Each night, choose 2 players: you learn if either is the Wraith. One good player always reads as the Wraith to you." },
+  warden:     { name: "Warden", team: "villager", text: "Each night except the first, choose a player other than yourself: the Wraith can't kill them tonight." },
+  gravedigger:{ name: "Gravedigger", team: "villager", text: "Each night except the first, you learn the role of the player executed that day." },
+  hunter:     { name: "Hunter", team: "villager", text: "Once per game, during the day, publicly choose a player: if they are the Wraith, they die." },
+  knight:     { name: "Knight", team: "villager", text: "The Wraith can't kill you." },
+  witness:    { name: "Witness", team: "villager", text: "If you die at night, choose a player: you learn their role." },
+  sleepwalker:{ name: "Sleepwalker", team: "stray", text: "You think you are a Villager, but you aren't. Your ability doesn't work and your information may be false." },
+  martyr:     { name: "Martyr", team: "stray", text: "If you are executed, good loses." },
+  hermit:     { name: "Hermit", team: "stray", text: "You might read as evil, and as the Wraith, even though you are good." },
+  fuse:       { name: "Fuse", team: "stray", text: "Each night after the first, you might die without warning." },
+  hexer:      { name: "Hexer", team: "henchman", text: "Each night, choose a player: they are hexed the next day and night. A hexed player's ability doesn't work and their information may be false." },
+  successor:  { name: "Successor", team: "henchman", text: "If the Wraith dies while 5 or more players are alive, you become the Wraith." },
+  smuggler:   { name: "Smuggler", team: "henchman", text: "There are 2 extra Strays in play, and 2 fewer Villagers." },
+  mole:       { name: "Mole", team: "henchman", text: "Each night, you see every player's role. You read as good to the Bellringer, Tally Clerk and Seer." },
+  wraith:     { name: "Wraith", team: "wraith", text: "Each night except the first, choose a player: they die. If you choose yourself, you die and a living Henchman becomes the Wraith." }
+};
+const TEAMS = {
+  villager: { label: "Villager", plural: "Villagers", side: "good" },
+  stray:    { label: "Stray", plural: "Strays", side: "good" },
+  henchman: { label: "Henchman", plural: "Henchmen", side: "evil" },
+  wraith:   { label: "Demon", plural: "Demon", side: "evil" }
+};
+const ofTeam = t => Object.keys(ROLES).filter(r => ROLES[r].team === t);
+const VILL = ofTeam("villager"), STRAYS = ofTeam("stray"), HENCH = ofTeam("henchman");
+// Villagers, Strays, Henchmen, Wraith by player count
+const DIST = { 5:[3,0,1,1], 6:[3,1,1,1], 7:[5,0,1,1], 8:[5,1,1,1], 9:[5,2,1,1], 10:[7,0,2,1], 11:[7,1,2,1], 12:[7,2,2,1], 13:[9,0,3,1], 14:[9,1,3,1], 15:[9,2,3,1] };
+const EXAMPLE = ["Ana", "Ben", "Cleo", "Dev", "Eli", "Fay", "Gus"];
+const KEY = "hollowmere-nights-v1";
+
+const $app = document.getElementById("app");
+let S;
+
+/* ---------- helpers ---------- */
+const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const P = i => S.players[i];
+const nm = i => P(i).name;
+const idxs = () => S.players.map((_, i) => i);
+const aliveIdx = () => idxs().filter(i => P(i).alive);
+const aliveCount = () => aliveIdx().length;
+const isEvilRole = r => TEAMS[ROLES[r].team].side === "evil";
+const seen = i => P(i).role === "sleepwalker" ? P(i).fake : P(i).role;
+const works = i => P(i).role !== "sleepwalker" && S.hex !== i;
+const lies = i => !works(i) && Math.random() < 0.8;
+const registersEvil = i => { const r = P(i).role; if (r === "mole") return false; if (r === "hermit") return Math.random() < 0.5; return isEvilRole(r); };
+const registersWraith = i => { const r = P(i).role; if (r === "wraith") return true; if (r === "hermit") return Math.random() < 0.35; return false; };
+const needVotes = () => Math.ceil(aliveCount() / 2);
+const roman = n => { const m = [[10,"X"],[9,"IX"],[5,"V"],[4,"IV"],[1,"I"]]; let s = ""; for (const [v, r] of m) while (n >= v) { s += r; n -= v; } return s; };
+const list = names => names.length <= 1 ? names.join("") : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+function phaseLabel() { return ["day", "dusk"].includes(S.phase) ? `Day ${S.night}` : `Night ${S.night}`; }
+function log(text) { S.log.push(`${phaseLabel()}: ${text}`); }
+function distText(n) {
+  const d = DIST[n]; if (!d) return "Needs 5 to 15 players.";
+  return `${n} players: ${d[0]} Villagers · ${d[1]} Stray${d[1] === 1 ? "" : "s"} · ${d[2]} Henchm${d[2] === 1 ? "an" : "en"} · 1 Wraith`;
+}
+
+/* ---------- setup ---------- */
+function setupState(names, resume) { return { phase: "setup", names: names || EXAMPLE.slice(), err: null, resume: resume || null, example: !names }; }
+
+function newGame(names) {
+  const n = names.length; let [v, s, h] = DIST[n];
+  const hench = shuffle(HENCH).slice(0, h);
+  if (hench.includes("smuggler")) { v -= 2; s += 2; }
+  const inPlay = [...shuffle(VILL).slice(0, v), ...shuffle(STRAYS).slice(0, s), ...hench, "wraith"];
+  const roles = shuffle(inPlay);
+  const players = names.map((name, i) => ({ name, role: roles[i], alive: true, ghost: true, fake: null }));
+  const villNotIn = VILL.filter(r => !inPlay.includes(r));
+  const sw = players.find(p => p.role === "sleepwalker");
+  if (sw) sw.fake = pick(villNotIn);
+  const bluffs = [...shuffle(villNotIn), ...shuffle(STRAYS.filter(r => !inPlay.includes(r) && r !== "sleepwalker"))].slice(0, 3);
+  const good = players.map((p, i) => i).filter(i => !isEvilRole(players[i].role));
+  S = {
+    phase: "night", names: names.slice(), players, night: 1, bluffs, redHerring: pick(good),
+    hex: null, hexAtNight: null, picks: {}, notes: players.map(() => []), notices: {}, log: [],
+    lastExec: null, hunterUsed: false, queue: [], qpos: 0, turn: { step: "handoff" },
+    deaths: [], dq: 0, day: null, duskText: "", winner: null, reason: ""
+  };
+  log(`Roles dealt: ${players.map(p => `${p.name} ${ROLES[p.role].name}`).join(", ")}.`);
+  startNight();
+}
+
+function startNight() {
+  S.phase = "night";
+  const n = S.players.length, off = (S.night - 1) % n;
+  S.queue = [...Array(n).keys()].map(k => (k + off) % n).filter(i => P(i).alive);
+  S.qpos = 0; S.picks = {}; S.turn = { step: "handoff" };
+}
+
+/* ---------- night information ---------- */
+function evilIntro(i) {
+  const W = idxs().find(j => P(j).role === "wraith");
+  const hs = idxs().filter(j => ROLES[P(j).role].team === "henchman");
+  if (P(i).role === "wraith") {
+    const out = [hs.length ? `Your Henchm${hs.length === 1 ? "an is" : "en are"} ${list(hs.map(nm))}.` : "You have no Henchmen."];
+    if (S.bluffs.length) out.push(`These good roles are not in play, so they are safe to claim: ${list(S.bluffs.map(r => ROLES[r].name))}.`);
+    return out;
+  }
+  const mates = hs.filter(j => j !== i);
+  return [`The Wraith is ${nm(W)}.` + (mates.length ? ` Your fellow Henchm${mates.length === 1 ? "an is" : "en are"} ${list(mates.map(nm))}.` : "")];
+}
+
+function pairInfo(i, team) {
+  const pool = team === "villager" ? VILL : HENCH, label = TEAMS[team].label;
+  const others = idxs().filter(j => j !== i);
+  let role, a, b;
+  if (lies(i)) {
+    role = pick(pool.filter(r => r !== seen(i)));
+    [a, b] = shuffle(others).slice(0, 2);
+  } else {
+    const real = others.filter(j => ROLES[P(j).role].team === team);
+    if (!real.length) return `There are no other ${label}s in play.`;
+    a = pick(real); role = P(a).role; b = pick(others.filter(j => j !== a));
+  }
+  const [x, y] = shuffle([a, b]);
+  return `One of ${nm(x)} and ${nm(y)} is the ${ROLES[role].name}.`;
+}
+
+function tallyInfo(i) {
+  const n = S.players.length, ev = idxs().map(registersEvil);
+  let c = 0; for (let j = 0; j < n; j++) if (ev[j] && ev[(j + 1) % n]) c++;
+  if (lies(i)) c = pick([0, 1, 2].filter(x => x !== c));
+  return `${c} pair${c === 1 ? "" : "s"} of evil players ${c === 1 ? "sits" : "sit"} next to each other.`;
+}
+
+function neighbours(i) {
+  const n = S.players.length;
+  let l = (i - 1 + n) % n; while (!P(l).alive && l !== i) l = (l - 1 + n) % n;
+  let r = (i + 1) % n; while (!P(r).alive && r !== i) r = (r + 1) % n;
+  return [...new Set([l, r])].filter(j => j !== i);
+}
+function bellInfo(i) {
+  const nb = neighbours(i);
+  let c = nb.filter(registersEvil).length;
+  if (lies(i)) c = pick([...Array(nb.length + 1).keys()].filter(x => x !== c));
+  return `${c} of your living neighbours (${list(nb.map(nm))}) ${c === 1 ? "is" : "are"} evil.`;
+}
+function seerInfo(i, a, b) {
+  let yes = [a, b].some(j => j === S.redHerring || registersWraith(j));
+  if (lies(i)) yes = !yes;
+  return yes ? `Yes. One of ${nm(a)} and ${nm(b)} is the Wraith.` : `No. Neither ${nm(a)} nor ${nm(b)} is the Wraith.`;
+}
+function graveInfo(i) {
+  if (!S.lastExec || S.lastExec.day !== S.night - 1) return "No one was executed today, so you learn nothing.";
+  let r = S.lastExec.role;
+  if (lies(i)) r = pick(Object.keys(ROLES).filter(x => x !== r));
+  return `${nm(S.lastExec.idx)}, executed today, was the ${ROLES[r].name}.`;
+}
+
+function buildTurn(i) {
+  const N = S.night, r = P(i).role, sr = seen(i), alive = aliveIdx();
+  const t = { step: "act", idx: i, kind: "decoy", picks: [], max: 1, choices: null, done: false, lines: [], notice: S.notices[i] || null, prompt: "", grim: null };
+  if (isEvilRole(r)) {
+    if (N === 1) t.lines.push(...evilIntro(i));
+    if (r === "mole") t.grim = idxs().map(j => [j, ROLES[P(j).role].name + (P(j).role === "sleepwalker" ? ` (thinks they are the ${ROLES[P(j).fake].name})` : "") + (P(j).alive ? "" : " · dead")]);
+    if (r === "hexer") { t.kind = "pick"; t.choices = alive; t.prompt = "Choose a player to hex. They will be hexed tomorrow and tomorrow night."; }
+    if (r === "wraith" && N > 1) { t.kind = "pick"; t.choices = alive; t.prompt = "Choose a player to kill tonight. Choose yourself to pass your power to a Henchman."; }
+  } else {
+    if (N === 1 && sr === "archivist") t.lines.push(pairInfo(i, "villager"));
+    if (N === 1 && sr === "sentry") t.lines.push(pairInfo(i, "henchman"));
+    if (N === 1 && sr === "tally") t.lines.push(tallyInfo(i));
+    if (sr === "bellringer") t.lines.push(bellInfo(i));
+    if (sr === "gravedigger" && N > 1) t.lines.push(graveInfo(i));
+    if (sr === "seer") { t.kind = "seer"; t.max = 2; t.choices = idxs(); t.prompt = "Choose 2 players. You will learn if either is the Wraith."; }
+    if (sr === "warden" && N > 1) { t.kind = "pick"; t.choices = alive.filter(j => j !== i); t.prompt = "Choose a player to protect from the Wraith tonight."; }
+  }
+  if (t.kind === "decoy") {
+    t.choices = alive.filter(j => j !== i);
+    t.prompt = (t.lines.length || t.grim ? "When you've read this, tap" : "Nothing to do tonight. Tap") + " any player, then press Done. Everyone taps someone, so nobody can tell who has a real action.";
+  }
+  return t;
+}
+
+function buildDeathTurn(i) {
+  const t = { step: "act", idx: i, kind: "decoy", picks: [], max: 1, choices: idxs().filter(j => j !== i), done: false, lines: [], notice: null, prompt: "", dead: true };
+  if (seen(i) === "witness") { t.kind = "witness"; t.prompt = "Choose a player: you learn their role."; }
+  else t.prompt = "Tap any player, then press Done. Everyone who dies at night does this, so nobody can tell who has a real action.";
+  return t;
+}
+
+function endNight() {
+  const N = S.night, deaths = [];
+  S.hexAtNight = S.hex;
+  const W = idxs().find(j => P(j).alive && P(j).role === "wraith");
+  if (N > 1 && S.picks.wraith != null && W != null) {
+    const t = S.picks.wraith;
+    if (S.hex === W) log("The Wraith was hexed, so its kill failed.");
+    else if (t === W) {
+      die(W, "starpass"); deaths.push(W);
+      const hs = aliveIdx().filter(j => ROLES[P(j).role].team === "henchman");
+      if (hs.length) {
+        const m = hs.find(j => P(j).role === "successor") ?? pick(hs);
+        log(`${nm(W)} (Wraith) killed themself. ${nm(m)} (${ROLES[P(m).role].name}) became the Wraith.`);
+        P(m).role = "wraith"; S.notices[m] = "The old Wraith gave its power to you. You are now the Wraith.";
+      } else log(`${nm(W)} (Wraith) killed themself with no Henchmen left.`);
+    } else {
+      const wd = S.picks.warden;
+      if (wd && wd.target === t && P(wd.by).alive && works(wd.by)) log(`The Wraith chose ${nm(t)}, but the Warden protected them.`);
+      else if (P(t).role === "knight" && works(t)) log(`The Wraith chose ${nm(t)}, but the Knight can't be killed.`);
+      else { die(t, "night"); deaths.push(t); log(`The Wraith killed ${nm(t)}.`); }
+    }
+  }
+  if (N > 1) {
+    const f = idxs().find(j => P(j).alive && P(j).role === "fuse");
+    if (f != null && Math.random() < 0.2) { die(f, "night"); deaths.push(f); log(`The Fuse (${nm(f)}) burned out.`); }
+  }
+  const hx = idxs().find(j => P(j).alive && P(j).role === "hexer");
+  S.hex = hx != null && S.picks.hexer != null ? S.picks.hexer : null;
+  if (S.hex != null) log(`${nm(S.hex)} is hexed for Day ${N} and Night ${N + 1}.`);
+  S.picks = {};
+  S.deaths = deaths;
+  if (checkWin()) return;
+  if (deaths.length) { S.phase = "dawnPrivate"; S.dq = 0; S.turn = { step: "handoff" }; }
+  else S.phase = "dawn";
+}
+
+function die(i, cause) {
+  const before = aliveCount();
+  P(i).alive = false;
+  if (P(i).role === "hexer") S.hex = null;
+  if (P(i).role === "wraith" && cause !== "starpass") {
+    const sc = idxs().find(j => P(j).alive && P(j).role === "successor");
+    if (sc != null && before >= 5 && S.hex !== sc) {
+      P(sc).role = "wraith"; S.notices[sc] = "The Wraith died. You are now the Wraith.";
+      log(`${nm(sc)} (Successor) became the Wraith.`);
+    }
+  }
+}
+
+function checkWin() {
+  if (S.winner) return true;
+  if (!S.players.some(p => p.alive && p.role === "wraith")) return finish("good", "The Wraith is dead.");
+  if (aliveCount() <= 2) return finish("evil", "Only two players are left alive.");
+  return false;
+}
+function finish(side, reason) { S.phase = "over"; S.winner = side; S.reason = reason; log(reason); return true; }
+
+/* ---------- views ---------- */
+function roleCard(r) {
+  const R = ROLES[r], T = TEAMS[R.team];
+  return `<div class="role ${T.side}"><span class="team">${T.label} · ${T.side === "good" ? "Good" : "Evil"}</span><h3>${R.name}</h3><p>${R.text}</p></div>`;
+}
+function rolesRef() {
+  const group = (t) => `<div><h4 class="${TEAMS[t].side}">${TEAMS[t].plural}</h4><dl>${ofTeam(t).map(r => `<dt>${ROLES[r].name}</dt><dd>${ROLES[r].text}</dd>`).join("")}</dl></div>`;
+  return `<details class="panel"><summary>All roles in Hollowmere</summary><div class="roles">${["villager", "stray", "henchman", "wraith"].map(group).join("")}</div></details>`;
+}
+function playerBtns(choices, selected, act, opts = {}) {
+  return `<div class="grid">${choices.map(j => {
+    const dis = opts.disabled && opts.disabled(j);
+    return `<button class="pbtn${selected.includes(j) ? " sel" : ""}${P(j).alive ? "" : " dead"}" data-act="${act}" data-v="${j}"${dis ? " disabled" : ""}><small>Seat ${j + 1}${opts.note ? opts.note(j) : ""}</small>${esc(nm(j))}</button>`;
+  }).join("")}</div>`;
+}
+
+function vSetup() {
+  const n = S.names.length;
+  return `
+  <section class="stack fade">
+    <p class="eyebrow">A storyteller-free game of bluffing for 5 to 15 players</p>
+    <h1>Hollowmere Nights</h1>
+    <p class="muted">A Wraith hides among the villagers. Each night it kills. Each day the town argues, accuses and votes to execute someone. No narrator needed: one phone runs the night and passes from hand to hand.</p>
+  </section>
+  ${S.resume ? `<section class="panel">
+    <p><b>Game in progress</b> · ${esc(S.resume.players.length)} players, ${esc(S.resume.phase === "night" || S.resume.phase === "dawnPrivate" ? "Night" : "Day")} ${esc(S.resume.night)}</p>
+    <div class="row"><button class="btn" data-act="resume">Resume it</button><button class="btn ghost" data-act="discard">Discard it</button></div>
+  </section>` : ""}
+  <section class="panel">
+    <div class="stack" style="gap:4px">
+      <h2 style="font-size:1.5rem">Who's playing?</h2>
+      <p class="muted small">Enter names in seating order, going clockwise around the circle. ${S.example ? "These are example names. Replace them with your group." : ""}</p>
+    </div>
+    <div class="names">${S.names.map((v, i) => `
+      <div class="name-row"><span class="seat">${i + 1}</span>
+        <input type="text" class="name-input" id="name-${i}" data-v="${i}" value="${esc(v)}" aria-label="Player ${i + 1} name" autocomplete="off">
+        <button class="x" data-act="removeName" data-v="${i}" aria-label="Remove player ${i + 1}"${n <= 5 ? " disabled" : ""}>×</button></div>`).join("")}
+    </div>
+    <div class="row"><button class="btn ghost" data-act="addName"${n >= 15 ? " disabled" : ""}>Add player</button><span class="dist" id="dist">${distText(n)}</span></div>
+    ${S.err ? `<p class="err">${esc(S.err)}</p>` : ""}
+    <button class="btn big wide" data-act="start">Deal roles and begin Night I</button>
+  </section>
+  <section class="panel">
+    <h2 style="font-size:1.5rem">How a round works</h2>
+    <ol class="how">
+      <li><b>Night.</b> The phone names one player at a time. Only that player looks. They learn their role and information, or make their choice, then pass the phone on. Everyone takes a turn, even with nothing to do.</li>
+      <li><b>Dawn.</b> Put the phone in the middle. It tells the town who died.</li>
+      <li><b>Day.</b> Talk freely. Claim roles, share information and lie if you're evil. Your role card never leaves the phone, so no one can prove anything.</li>
+      <li><b>Nominations.</b> Each living player may nominate once per day, and each player may be nominated once. Everyone votes with a raised hand; enter the hands in the app. To go on the block, a nominee needs votes from at least half the living players and more votes than anyone else today. A tie means no one is on the block.</li>
+      <li><b>Execution.</b> When the town ends the day, whoever is on the block is executed. Their role stays secret.</li>
+      <li><b>The dead</b> keep talking and get one ghost vote for the rest of the game.</li>
+    </ol>
+    <p><b>Good wins</b> when the Wraith dies. <b>Evil wins</b> when only two players are left alive.</p>
+  </section>
+  ${rolesRef()}`;
+}
+
+function vNight() {
+  const t = S.turn, isDawn = S.phase === "dawnPrivate";
+  const order = isDawn ? S.deaths : S.queue, pos = isDawn ? S.dq : S.qpos, i = order[pos];
+  if (t.step === "handoff") return `
+    <section class="handoff fade">
+      <p class="eyebrow">${isDawn ? `Before dawn · Day ${roman(S.night)}` : `Night ${roman(S.night)}`} · turn ${pos + 1} of ${order.length}</p>
+      <div class="dial" style="--p:${pos / order.length}" aria-hidden="true"><span>${roman(S.night)}</span></div>
+      <p class="muted">${isDawn ? `${esc(nm(i))} died in the night. ` : ""}Pass the phone to</p>
+      <h2 class="who">${esc(nm(i))}</h2>
+      <p class="muted small">Everyone else, look away from the screen.</p>
+      <button class="btn big" data-act="open">I'm ${esc(nm(i))}</button>
+    </section>`;
+  const needsLock = t.kind !== "decoy";
+  const canLock = t.picks.length === t.max;
+  return `
+  <section class="stack fade">
+    <p class="eyebrow">Only ${esc(nm(i))} should see this</p>
+    ${roleCard(seen(i))}
+    ${t.dead ? `<div class="callout evil">You died in the night. You can still talk, and you keep one ghost vote for the rest of the game.</div>` : ""}
+    ${t.notice ? `<div class="callout evil">${esc(t.notice)}</div>` : ""}
+    ${t.lines.map(l => `<div class="callout">${esc(l)}</div>`).join("")}
+    ${t.grim ? `<div class="panel" style="padding:12px"><p class="eyebrow">Everyone's role</p><div class="scroll"><table class="grim">${t.grim.map(([j, txt]) => `<tr><td>${j + 1}</td><td>${esc(nm(j))}</td><td>${esc(txt)}</td></tr>`).join("")}</table></div></div>` : ""}
+    ${!t.done ? `<div class="stack"><p>${esc(t.prompt)}</p>${playerBtns(t.choices, t.picks, "pick")}</div>` : ""}
+    ${needsLock && !t.done
+      ? `<button class="btn big wide" data-act="confirm"${canLock ? "" : " disabled"}>Lock in</button>`
+      : `<button class="btn big wide" data-act="done"${canLock || t.done ? "" : " disabled"}>Done, hide this</button>`}
+  </section>`;
+}
+
+function vDawn() {
+  const d = S.deaths.map(nm);
+  return `
+  <section class="handoff fade">
+    <p class="eyebrow">Day ${roman(S.night)}</p>
+    <div class="dial" style="--p:1" aria-hidden="true"><span>${roman(S.night)}</span></div>
+    <h2>Dawn over Hollowmere</h2>
+    <p style="font-size:1.15rem">${d.length ? `${esc(list(d))} died in the night.` : "Nobody died in the night."}</p>
+    <p class="muted small">${aliveCount()} players are alive. Executing someone today takes ${needVotes()} votes.</p>
+    <button class="btn big" data-act="startDay">Start the day</button>
+  </section>`;
+}
+
+function vDay() {
+  const D = S.day, m = D.mode, alive = aliveCount();
+  const town = `<div class="town">${idxs().map(j => {
+    const p = P(j), tags = [];
+    if (!p.alive) tags.push(p.ghost ? `<span class="tag ghost">ghost vote</span>` : `<span class="tag">vote used</span>`);
+    if (D.nominees.includes(j)) tags.push(`<span class="tag hot">nominated</span>`);
+    if (D.nominators.includes(j)) tags.push(`<span class="tag">has nominated</span>`);
+    return `<div class="citizen${p.alive ? "" : " dead"}"><span class="n">${j + 1}</span><span class="nm">${esc(p.name)}</span>${tags.length ? `<span class="tags">${tags.join("")}</span>` : ""}</div>`;
+  }).join("")}</div>`;
+  const block = D.block != null
+    ? `<p class="block">On the block: <b>${esc(nm(D.block))}</b> with ${D.high} votes</p>`
+    : `<p class="block muted">${D.tie ? `Tied at ${D.high} votes, so no one is on the block.` : "No one is on the block."}</p>`;
+
+  let panel;
+  if (!m) panel = `
+    <div class="row">
+      <button class="btn" data-act="nom">Nominate</button>
+      <button class="btn ghost" data-act="hunt">Hunter's shot</button>
+      <button class="btn ghost" data-act="notes">Check my role</button>
+      <button class="btn evil" data-act="endday">End the day</button>
+    </div>`;
+  else if (m.type === "nom" && m.step === "who") panel = `<p><b>Who is nominating?</b></p>${playerBtns(aliveIdx(), [], "dpick", { disabled: j => D.nominators.includes(j), note: j => D.nominators.includes(j) ? " · done" : "" })}${cancel()}`;
+  else if (m.type === "nom" && m.step === "whom") panel = `<p><b>${esc(nm(m.by))} nominates…</b></p>${playerBtns(aliveIdx(), [], "dpick", { disabled: j => D.nominees.includes(j), note: j => D.nominees.includes(j) ? " · already" : "" })}${cancel()}`;
+  else if (m.type === "nom" && m.step === "vote") panel = `
+    <p><b>${esc(nm(m.by))} nominated ${esc(nm(m.target))}.</b> Everyone voting to execute raises a hand. Tap each raised hand.</p>
+    ${playerBtns(idxs(), m.votes, "vote", { disabled: j => !P(j).alive && !P(j).ghost, note: j => P(j).alive ? "" : (P(j).ghost ? " · ghost vote" : " · no vote") })}
+    <p class="tally">${m.votes.length} vote${m.votes.length === 1 ? "" : "s"} · needs ${needVotes()}${D.high ? `, and more than ${D.high} to take the block` : ""}</p>
+    <div class="row"><button class="btn" data-act="count">Count the votes</button>${cancel(true)}</div>`;
+  else if (m.type === "hunt" && m.step === "who") panel = `<p><b>Who claims to be the Hunter?</b> Anyone can claim it. The shot only works for the real Hunter, once per game.</p>${playerBtns(aliveIdx(), [], "dpick")}${cancel()}`;
+  else if (m.type === "hunt" && m.step === "whom") panel = `<p><b>${esc(nm(m.by))} aims at…</b></p>${playerBtns(aliveIdx().filter(j => j !== m.by), [], "dpick")}${cancel()}`;
+  else if (m.type === "notes" && m.step === "who") panel = `<p><b>Whose role and notes?</b> You'll pass the phone to them privately.</p>${playerBtns(idxs(), [], "dpick")}${cancel()}`;
+  else if (m.type === "notes" && m.step === "confirm") panel = `<div class="center stack"><p class="muted">Pass the phone to</p><h2 class="who">${esc(nm(m.who))}</h2><p class="muted small">Everyone else, look away.</p><button class="btn big" data-act="reveal">I'm ${esc(nm(m.who))}</button>${cancel()}</div>`;
+  else if (m.type === "notes" && m.step === "show") {
+    const notes = S.notes[m.who];
+    panel = `<p class="eyebrow">Only ${esc(nm(m.who))} should see this</p>${roleCard(seen(m.who))}
+      ${notes.length ? notes.map(n => `<div class="stack" style="gap:6px"><p class="eyebrow">${esc(n.when)}</p>${n.items.map(x => `<div class="callout">${esc(x)}</div>`).join("")}</div>`).join("") : `<p class="muted">No notes yet.</p>`}
+      <button class="btn big wide" data-act="cancel">Done, hide this</button>`;
+  }
+  else if (m.type === "end") panel = D.block != null
+    ? `<p><b>Execute ${esc(nm(D.block))}?</b> This ends the day and the night begins.</p><div class="row"><button class="btn evil" data-act="execute">Execute ${esc(nm(D.block))}</button>${cancel(true)}</div>`
+    : `<p><b>End the day with no execution?</b> No one is on the block.</p><div class="row"><button class="btn evil" data-act="execute">End the day</button>${cancel(true)}</div>`;
+
+  const private_ = m && m.type === "notes" && m.step !== "who";
+  return `
+  <section class="dayhead fade">
+    <div><p class="eyebrow">Hollowmere</p><h2>Day ${roman(S.night)}</h2></div>
+    <div class="stats"><div><small>Alive</small><b>${alive}/${S.players.length}</b></div><div><small>To execute</small><b>${needVotes()}</b></div></div>
+  </section>
+  ${private_ ? "" : `<section class="panel">${block}${town}</section>`}
+  <section class="panel">${panel}</section>
+  ${private_ ? "" : `${D.events.length ? `<section class="panel"><p class="eyebrow">Today</p><ul class="events">${D.events.map(e => `<li>${esc(e)}</li>`).join("")}</ul></section>` : ""}${rolesRef()}`}`;
+}
+function cancel(inline) { return `<button class="btn ghost${inline ? "" : " wide"}" data-act="cancel">Back</button>`; }
+
+function vDusk() {
+  return `
+  <section class="handoff fade">
+    <p class="eyebrow">Dusk · Day ${roman(S.night)}</p>
+    <h2>${esc(S.duskText)}</h2>
+    <p class="muted">Gather the phone. When everyone is ready, the night begins and the phone goes around again.</p>
+    <button class="btn big" data-act="nightfall">Begin Night ${roman(S.night + 1)}</button>
+  </section>`;
+}
+
+function vOver() {
+  const good = S.winner === "good";
+  return `
+  <section class="handoff fade">
+    <p class="eyebrow">The game is over</p>
+    <h1 style="color:var(--${good ? "good" : "evil"})">${good ? "Good wins" : "Evil wins"}</h1>
+    <p style="font-size:1.1rem">${esc(S.reason)}</p>
+  </section>
+  <section class="panel">
+    <p class="eyebrow">Everyone's role</p>
+    <div class="scroll"><table class="over-table">${idxs().map(j => {
+      const p = P(j), side = TEAMS[ROLES[p.role].team].side;
+      return `<tr><td>${j + 1}</td><td>${esc(p.name)}${p.alive ? "" : ' <span class="muted">(dead)</span>'}</td><td class="${side}">${ROLES[p.role].name}${p.role === "sleepwalker" ? ` <span class="muted">(thought: ${ROLES[p.fake].name})</span>` : ""}</td></tr>`;
+    }).join("")}</table></div>
+  </section>
+  <section class="panel">
+    <p class="eyebrow">What happened</p>
+    <ul class="events">${S.log.map(l => `<li>${esc(l)}</li>`).join("")}</ul>
+  </section>
+  <div class="row"><button class="btn big" data-act="again">Play again, same players</button><button class="btn ghost big" data-act="changePlayers">Change players</button></div>`;
+}
+
+/* ---------- actions ---------- */
+const ACT = {
+  addName() { S.names.push(""); S.example = false; S.err = null; },
+  removeName(v) { S.names.splice(v, 1); S.err = null; },
+  start() {
+    const names = S.names.map(s => s.trim());
+    if (names.length < 5 || names.length > 15) return S.err = "You need 5 to 15 players.";
+    if (names.some(s => !s)) return S.err = "Every seat needs a name.";
+    if (new Set(names.map(s => s.toLowerCase())).size !== names.length) return S.err = "Two players have the same name. Add an initial to tell them apart.";
+    newGame(names);
+  },
+  resume() { S = sanitize(S.resume); },
+  discard() { S.resume = null; try { localStorage.removeItem(KEY); } catch (e) {} },
+
+  open() {
+    if (S.phase === "dawnPrivate") S.turn = buildDeathTurn(S.deaths[S.dq]);
+    else S.turn = buildTurn(S.queue[S.qpos]);
+  },
+  pick(v) {
+    const t = S.turn; if (t.done) return;
+    if (t.picks.includes(v)) t.picks = t.picks.filter(x => x !== v);
+    else if (t.max === 1) t.picks = [v];
+    else if (t.picks.length < t.max) t.picks.push(v);
+  },
+  confirm() {
+    const t = S.turn; if (t.picks.length !== t.max) return;
+    const i = t.idx, r = P(i).role, sr = seen(i), tg = t.picks[0];
+    if (t.kind === "pick") {
+      if (r === "hexer") S.picks.hexer = tg;
+      else if (r === "wraith") S.picks.wraith = tg;
+      else if (sr === "warden") S.picks.warden = { by: i, target: tg };
+      t.lines.push(`You chose ${nm(tg)}.`);
+    }
+    if (t.kind === "seer") t.lines.push(seerInfo(i, t.picks[0], t.picks[1]));
+    if (t.kind === "witness") {
+      let role = P(tg).role;
+      if ((P(i).role === "sleepwalker" || S.hexAtNight === i) && Math.random() < 0.8) role = pick(Object.keys(ROLES).filter(x => x !== role));
+      t.lines.push(`${nm(tg)} is the ${ROLES[role].name}.`);
+    }
+    t.done = true;
+  },
+  done() {
+    const t = S.turn;
+    if (t.kind === "decoy" && t.picks.length !== 1) return;
+    const items = [...(t.notice ? [t.notice] : []), ...t.lines];
+    if (items.length) S.notes[t.idx].push({ when: `Night ${roman(S.night)}`, items });
+    delete S.notices[t.idx];
+    if (S.phase === "dawnPrivate") {
+      S.dq++;
+      if (S.dq >= S.deaths.length) S.phase = "dawn"; else S.turn = { step: "handoff" };
+    } else {
+      S.qpos++;
+      if (S.qpos >= S.queue.length) endNight(); else S.turn = { step: "handoff" };
+    }
+  },
+  startDay() { S.phase = "day"; S.day = { nominators: [], nominees: [], high: 0, block: null, tie: false, events: [], mode: null }; },
+  nom() { S.day.mode = { type: "nom", step: "who" }; },
+  hunt() { S.day.mode = { type: "hunt", step: "who" }; },
+  notes() { S.day.mode = { type: "notes", step: "who" }; },
+  endday() { S.day.mode = { type: "end" }; },
+  cancel() { S.day.mode = null; },
+  reveal() { S.day.mode.step = "show"; },
+  dpick(v) {
+    const m = S.day.mode;
+    if (m.type === "nom") { if (m.step === "who") { m.by = v; m.step = "whom"; } else { m.target = v; m.step = "vote"; m.votes = []; } }
+    else if (m.type === "hunt") { if (m.step === "who") { m.by = v; m.step = "whom"; } else shoot(m.by, v); }
+    else if (m.type === "notes") { m.who = v; m.step = "confirm"; }
+  },
+  vote(v) { const m = S.day.mode; m.votes = m.votes.includes(v) ? m.votes.filter(x => x !== v) : [...m.votes, v]; },
+  count() {
+    const D = S.day, m = D.mode, need = needVotes(), v = m.votes.length;
+    m.votes.forEach(j => { if (!P(j).alive) P(j).ghost = false; });
+    D.nominators.push(m.by); D.nominees.push(m.target);
+    let res;
+    if (v >= need && v > D.high) { D.high = v; D.block = m.target; D.tie = false; res = `${nm(m.target)} is now on the block.`; }
+    else if (v >= need && v === D.high) { D.block = null; D.tie = true; res = "That ties the top vote, so no one is on the block."; }
+    else if (v >= need) res = `That's fewer than the ${D.high} votes already on the block, so nothing changes.`;
+    else res = "Not enough votes.";
+    const line = `${nm(m.by)} nominated ${nm(m.target)}: ${v} vote${v === 1 ? "" : "s"}. ${res}`;
+    D.events.push(line); log(line);
+    D.mode = null;
+  },
+  execute() {
+    const t = S.day.block;
+    S.day.mode = null;
+    if (t != null) {
+      const r = P(t).role;
+      S.lastExec = { day: S.night, idx: t, role: r };
+      log(`${nm(t)} (${ROLES[r].name}) was executed.`);
+      die(t, "exec");
+      S.duskText = `${nm(t)} was executed.`;
+      if (r === "martyr" && works(t)) { finish("evil", `${nm(t)} was the Martyr, and the town executed them.`); return; }
+      if (checkWin()) return;
+    } else { S.lastExec = null; S.duskText = "No one was executed today."; log("No execution."); }
+    S.phase = "dusk";
+  },
+  nightfall() { S.night++; startNight(); },
+  again() { newGame(S.names); },
+  changePlayers() { const names = S.names; try { localStorage.removeItem(KEY); } catch (e) {} S = setupState(names); }
+};
+
+function shoot(by, t) {
+  S.day.mode = null;
+  let hit = false;
+  if (P(by).role === "hunter" && !S.hunterUsed) { S.hunterUsed = true; hit = works(by) && registersWraith(t); }
+  const line = `${nm(by)} fired the Hunter's shot at ${nm(t)}. ${hit ? `${nm(t)} dies.` : "Nothing happens."}`;
+  S.day.events.push(line); log(line);
+  if (hit) { die(t, "hunter"); checkWin(); }
+}
+
+/* ---------- loop ---------- */
+function sanitize(s) {
+  if (s.turn && s.turn.step === "act") s.turn = { step: "handoff" };
+  if (s.day && s.day.mode && s.day.mode.type === "notes") s.day.mode = null;
+  return s;
+}
+function save() {
+  try {
+    if (S.phase === "setup") return;
+    if (S.phase === "over") localStorage.removeItem(KEY);
+    else localStorage.setItem(KEY, JSON.stringify(S));
+  } catch (e) {}
+}
+function render() {
+  document.body.classList.toggle("day", ["day", "dawn", "dusk"].includes(S.phase));
+  const view = { setup: vSetup, night: vNight, dawnPrivate: vNight, dawn: vDawn, day: vDay, dusk: vDusk, over: vOver }[S.phase];
+  $app.innerHTML = view();
+  save();
+}
+
+$app.addEventListener("click", e => {
+  const b = e.target.closest("[data-act]");
+  if (!b || b.disabled) return;
+  const fn = ACT[b.dataset.act]; if (!fn) return;
+  const prevPhase = S.phase, prevStep = S.turn && S.turn.step;
+  fn(b.dataset.v != null ? Number(b.dataset.v) : undefined);
+  render();
+  if (S.phase !== prevPhase || (S.turn && S.turn.step !== prevStep)) window.scrollTo({ top: 0 });
+});
+$app.addEventListener("input", e => {
+  if (!e.target.matches(".name-input")) return;
+  S.names[Number(e.target.dataset.v)] = e.target.value;
+  S.example = false;
+});
+
+function start(data) {
+  if (data && data.phase) { S = sanitize(data); render(); return; }
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY)); } catch (e) {}
+  S = setupState(saved && saved.names ? saved.names : null, saved && saved.phase && saved.phase !== "setup" && saved.phase !== "over" ? saved : null);
+  render();
+}
+window.claude?.hot?.snapshot?.(() => S);
+window.claude?.hot?.ready ? window.claude.hot.ready(start) : start(window.claude?.hot?.data ?? {});
+</script>
+
+</body>
+</html>
